@@ -410,7 +410,8 @@ real_lp:                         # real LP positions of other wallets (phase 11)
   enabled: true
   scan_minutes: 5                # on-chain scan of open positions per pool (getProgramAccounts by lb_pair, ~10 credits
                                  # per pool): frequent scans catch more positions while open (shape = realism)
-  max_wallet_queries_per_scan: 40   # Meteora Data API /positions/{pool}/pnl calls per scan (all pools)
+  max_wallet_queries_per_scan: 100  # Meteora Data API /positions/{pool}/pnl calls per scan (all pools; ~3 rps, no RPC credits); positions
+                                 # that opened while we watched come first (dlmm lp outcomes needs their PnL)
   max_pages_per_wallet: 3        # 100 positions per page
   refetch_hours: 6               # re-query a (wallet, pool) at most this often (closed ones get priority)
   fetch_events: true             # /positions/{address}/historical for positions closed in our data window

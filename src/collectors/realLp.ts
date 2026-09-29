@@ -360,7 +360,7 @@ export class RealLpCollector {
       for (const r of db.all<{ wallet: string; pool: string }>(
         `SELECT DISTINCT s.wallet, s.pool FROM lp_position_sightings s
          WHERE s.pool IN (${pp}) AND s.gone_at IS NULL AND NOT EXISTS (SELECT 1 FROM lp_wallet_fetches f WHERE f.wallet = s.wallet AND f.pool = s.pool)
-         ORDER BY random() LIMIT ?`,
+         ORDER BY s.new_in_scan DESC, random() LIMIT ?`, // the cohort that opened while we watched first: it is the unbiased sample (lpOutcomes)
         ...pools, max,
       )) push(r.wallet, r.pool);
       for (const r of db.all<{ wallet: string; pool: string }>(

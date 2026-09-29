@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import type { Db } from "../db/index.ts";
 import { getSession } from "../db/repo.ts";
 import { realismMarkdown } from "../analysis/realism.ts";
+import { lpOutcomes, lpOutcomesMarkdown } from "../analysis/lpOutcomes.ts";
 import { portfolioReportMarkdown } from "../analysis/portfolio.ts";
 import { loadConfig } from "../config/load.ts";
 import { calibrationMarkdown, groupComparison, groupComparisonMarkdown, reconciliationMarkdown, safetyMemoryMarkdown, breakEvenMarkdown, entryFilterMarkdown, scoreCalibration, signalVsBaseline, signalVsBaselineMarkdown } from "./analytics.ts";
@@ -216,6 +217,10 @@ export function writeSessionReport(db: Db, simSessionId: string, outDir = "repor
   md.push("## Real LP positions and simulator realism (addendum 4)");
   md.push("");
   md.push(realismMarkdown(db, dataSession));
+  md.push("");
+  md.push("### Real positions that opened during the session, followed to closure");
+  md.push("");
+  md.push(lpOutcomesMarkdown(lpOutcomes(db, { since: ds.start_at, minDepositUsd: 20 })));
   md.push("");
   md.push("## Score calibration");
   md.push("");

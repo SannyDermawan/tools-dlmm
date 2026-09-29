@@ -469,6 +469,22 @@ lpCmd
     app.db.close();
   });
 lpCmd
+  .command("outcomes")
+  .description("outcomes of real positions that opened while we watched, followed to closure (survival + PnL by width / shape / hold time, censoring-aware)")
+  .option("-p, --pool <address...>", "only these pools")
+  .option("--since-hours <h>", "only positions first seen within the last N hours", parseFloat)
+  .option("--min-deposit <usd>", "ignore PnL of positions with a smaller deposit", parseFloat, 20)
+  .action(async (opts) => {
+    const app = createApp(cfgPath());
+    const { lpOutcomes, lpOutcomesMarkdown } = await import("./analysis/lpOutcomes.ts");
+    const r = lpOutcomes(app.db, {
+      pools: opts.pool, minDepositUsd: opts.minDeposit,
+      since: opts.sinceHours !== undefined ? Date.now() - opts.sinceHours * 3_600_000 : undefined,
+    });
+    console.log(lpOutcomesMarkdown(r));
+    app.db.close();
+  });
+lpCmd
   .command("wallets")
   .description("recompute lp_wallets and list the best wallets")
   .option("-n, --top <n>", "rows", (v) => parseInt(v, 10), 20)
