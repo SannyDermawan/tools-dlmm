@@ -11,6 +11,7 @@ import { ExitEngine } from "./exitEngine.ts";
 import { tokenFlowLookup } from "../collectors/tokenFlow.ts";
 import { SignalBook } from "./signalEngine.ts";
 import { PoolMemory } from "../features/memory.ts";
+import { AthLookup } from "../features/ath.ts";
 import { RugDetector } from "../features/rugDetector.ts";
 import { auditLookup, type AuditRow } from "../features/safetyData.ts";
 
@@ -71,8 +72,13 @@ export function buildDecisionStack(
       return r?.supply_ui ? { riskIsX, supply: r.supply_ui } : null;
     },
   );
+  const athLookup = new AthLookup(db);
   const gridSignals: GridSignals = {
     book,
+    ath: (pool, t) => {
+      const m = metaOf.get(pool);
+      return m && !bluechip.has(m.tokenX) ? athLookup.at(pool, t) : null; // the pool price is that of the base token only when it is the risk token
+    },
     exitEngine,
     memory,
     indicators: scoring.indicators ?? undefined,

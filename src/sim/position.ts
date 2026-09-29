@@ -6,6 +6,19 @@ import type { ScalarExitPolicy } from "./policies.ts";
 
 export type Variant = "none" | "partial_harvest" | "fee_compounding" | "single_sided_reseed" | "wide_range";
 
+/**
+ * Yunus flip: when the position has been fully converted to the base token (price fell through the
+ * whole range) it is redeployed base-only above the new price ("ask"), with an optional shape mix.
+ */
+export interface FlipSpec {
+  /** second shape and its share of the flip range (Yunus: 30% spot on 70% bid-ask); null = one shape */
+  blend: { strategy: Strategy; share: number } | null;
+  shape: Strategy;
+  /** the flip range covers this upside price move (%) */
+  upPct: number;
+  maxFlips: number;
+}
+
 export interface PositionSpec {
   strategy: Strategy;
   sides: Sides;
@@ -25,6 +38,8 @@ export interface PositionSpec {
   cooldownEnabled?: boolean | null;
   /** phase 13: indicator entry filter (none when absent) */
   entryFilter?: string;
+  /** yunus_flip entry mode: redeploy base-only above once fully converted to the base token */
+  flip?: FlipSpec;
   /** full grid combination, journaled as JSON */
   combo: Record<string, unknown>;
 }

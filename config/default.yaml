@@ -152,6 +152,7 @@ collectors:
     interval_seconds: 300
     warmup_hours: 24
     refresh_lookback_minutes: 30
+    daily_lookback_days: 365 # daily candles (24h) back to the pool's start: base of ath_drawdown_pct; 0 = off
   token_security:
     enabled: true
     interval_minutes: 60
@@ -327,6 +328,7 @@ weights_profile: v1_default
 presets:
   meridian: presets/meridian.yaml   # second baseline (entry mode meridian_preset)
   friday: presets/friday.yaml       # Friday's scalp playbook (entry mode friday_scalp; stage 1 = partial)
+  yunus: presets/yunus.yaml         # Yunus / EvilPanda flip playbook (entry mode yunus_flip)
 
 memory:                          # pool / token memory across sessions (phase 10)
   cooldown:

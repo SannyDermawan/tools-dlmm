@@ -18,7 +18,7 @@ const collector = <T extends z.ZodRawShape>(shape: T) =>
 export const STRATEGIES = ["spot", "curve", "bidask"] as const;
 export const SIDES = ["two_sided", "base_only", "quote_only"] as const;
 export const CATEGORIES = ["memecoin", "bluechip"] as const;
-export const ENTRY_MODES = ["all_pools_baseline", "meridian_preset", "friday_scalp", "signal_enter", "signal_watch"] as const;
+export const ENTRY_MODES = ["all_pools_baseline", "meridian_preset", "friday_scalp", "yunus_flip", "signal_enter", "signal_watch"] as const;
 export const OHLCV_TIMEFRAMES = ["5m", "30m", "1h", "2h", "4h", "12h", "24h"] as const;
 
 const numOrList = z.union([z.number().positive(), z.array(z.number().positive()).min(1)]);
@@ -77,6 +77,17 @@ const exitPolicy = z.discriminatedUnion("type", [
   z.object({ type: z.literal("low_yield_exit"), min_fee_pct_per_hour: nonneg, window_minutes: pos, min_age_minutes: nonneg }).strict(),
   // ---- Friday playbook (stage 1): time stop, and the scalp combination (time stop + out-of-range)
   z.object({ type: z.literal("time_stop"), minutes: numOrList }).strict(),
+  // ---- Yunus playbook: leave at break-even after having been under water (lists expand into grid levels)
+  z
+    .object({
+      type: z.literal("breakeven_exit"),
+      min_underwater_pct: numOrList, // how deep the net PnL must have been (% of capital) before break-even counts
+      target_pct: nonneg.default(0), // close when net PnL is back at this level (0 = break-even after costs)
+      time_cap_minutes: numOrList,   // hard cap: close whatever is left
+      tp_pct: pos.optional(),
+      sl_pct: pos.optional(),        // the playbooks run without one
+    })
+    .strict(),
   z
     .object({
       type: z.literal("scalp"),
@@ -96,6 +107,8 @@ const exitPolicy = z.discriminatedUnion("type", [
     })
     .strict(),
 ]);
+
+export const exitPolicySchema = exitPolicy;
 
 const opCounts = z
   .object({ open: nonneg, close: nonneg, rebalance: nonneg, claim: nonneg, add: nonneg, swap: nonneg })
@@ -334,6 +347,8 @@ export const ConfigSchema = z
           interval_seconds: pos,
           warmup_hours: nonneg,
           refresh_lookback_minutes: pos,
+          /** daily candles back to the pool's start (ATH feature); 0 = off */
+          daily_lookback_days: nonneg.default(365),
         }),
         token_security: collector({
           interval_minutes: pos,
@@ -467,7 +482,7 @@ export const ConfigSchema = z
       })
       .strict(),
     weights_profile: z.string(),
-    presets: z.object({ meridian: z.string(), friday: z.string() }).strict(),
+    presets: z.object({ meridian: z.string(), friday: z.string(), yunus: z.string().default("presets/yunus.yaml") }).strict(),
     memory: z
       .object({
         cooldown: z
