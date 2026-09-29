@@ -1,6 +1,6 @@
 # Progress log
 
-Blueprint: `Blueprint_DLMM_Signal_Engine_Simulator.docx` v1.0. Done: Phase 0–10 (tooling). Weight calibration itself waits for data: >= 5 clean data sessions.
+Blueprint: `Blueprint_DLMM_Signal_Engine_Simulator.docx` v1.0. Done: Phase 0–13 (tooling; addendum v1.1 complete). Weight calibration itself waits for data: >= 5 clean data sessions.
 
 ## Phase 0 — Setup ✅
 - TypeScript + Node 24 (`node:sqlite`, WAL), YAML config validated with zod (strict keys),
@@ -295,10 +295,72 @@ Against the API alone, 11/20 pools were within ±5% (window 19:15–20:00).
   dimension table "pool cooldown".
 - Fixed while wiring: a scorer variable shadowing (`blocked`) that broke every scoring call; the
   blocklist cache keyed by minute (could return a stale "not blocked" within the same minute).
-- Tests: `test/phase10.test.ts` (17 new, 167 total).
-- Not verified live yet (the cloud container that finished this phase has no access to the Solana /
-  Jupiter / Meteora hosts). Next on the laptop: a short session to check the Jupiter audit against
-  the live API, then the next full session.
+- Tests: `test/phase10.test.ts` (19).
+- Verified live (cloud session `c604212c`, 15 min, 8 pools): 4/4 risk tokens audited with organic
+  score and bot holders; the blueprint gate vetoed the PARASITE pools (−40% crash during the run)
+  and signal_watch avoided them; **meridian_preset ran in full (preset_parsial 0)**.
+- Found live: Jupiter search takes comma-separated **mints** only; comma-separated symbols return
+  nothing, so PVP rival counts were always empty. Now one search per symbol (test updated).
+- Added after the first version: `simulation.avoid_bin_array_init` is honoured (signal modes skip
+  ranges needing a new bin array; the baseline still opens and pays); PVP handling variants as
+  replay configs (`config/variants/pvp-fail.yaml`, `pvp-ignore.yaml`).
+
+## Phase 11 — Real LP positions of other wallets (addendum 4) ✅
+- Sources verified 2026-09-29 against `dlmm.datapi.meteora.ag/api-docs/openapi.json`:
+  `/positions/{pool}/pnl?user=` (per wallet: range, deposits, withdrawals, fees, PnL, open / close
+  time, closed ones included) and `/positions/{address}/historical` (add / remove / claim events).
+  There is no "all positions of a pool" endpoint, so wallets come from chain.
+- `RealLpCollector` (`src/collectors/realLp.ts`, in sessions every `real_lp.scan_minutes`, or
+  `dlmm lp collect`):
+  1. `getProgramAccounts` on the DLMM program, `memcmp` lb_pair, `dataSlice` = owner only →
+     `lp_position_sightings`; diffing scans shows positions opened / closed while we watched;
+  2. shape of newly opened positions from their on-chain liquidity shares (spot / curve / bidask,
+     each side of the price normalized separately — a first version missed two-sided shapes);
+  3. wallet queue: wallets of opened / closed positions first, then never-fetched, then stale
+     (smart first); positions upserted into `real_lp_positions` (migration `008_real_lp`);
+  4. event history of closed positions inside our data → add / remove / claim counts, `simple`;
+  5. pool state and our score at their open from our own snapshots.
+- Smart LPs: `lp_wallets` (closed positions ≥ 10, win rate ≥ 60%, mean PnL ≥ 1%). Feature
+  `smart_lp_present` (competition module, switch `scoring.features.smart_lp`) is look-ahead safe:
+  smart status from closes before t, presence = opened ≤ t and not closed by t.
+- Realism check (`dlmm lp realism`, report section): simple real positions whose whole life lies in
+  one of our data sessions are replayed with the same range, shape, sides, token split and capital;
+  fee and PnL (before costs) compared, stored in `sim_realism_checks`.
+- Calibration on real positions, kept separate: `dlmm calibrate --source real_lp`.
+- Live (cloud, Helius): 8 pools = 10.7k open positions; one in-session scan 14 min after the first
+  saw 110 opened / 153 closed, decoded 109 shapes (60 bidask, 46 spot, 3 curve).
+- Tests: `test/phase11.test.ts` (17).
+
+## Phase 12 — Telegram, read-only (addendum 5) ✅ (no bot token here: tested with a fake client)
+- `src/notify/` works only from the database, so it runs inside a live session
+  (`telegram.in_session`) or alone (`dlmm telegram run`). Bot API 10.3 verified 2026-09-29.
+- Notifications: session start / end with the result (baseline vs signal vs preset, best / worst
+  strategy and exit policy), MASUK signals above score 80 and confidence 0.7 batched per minute
+  (pool, strategy, range, expectations, reasons, risks), alerts (data gap open ≥ 5 min, RPC quota,
+  WebSocket down, stale heartbeat, error bursts; each at most once per hour), daily briefing 08:00
+  WIB (+ an Indonesian LLM summary when the LLM layer is active).
+- Commands `/status /positions /signals /report /stop /help`, accepted only from allowed chat AND
+  user ids (`.env`); `/stop` uses the existing clean-stop request. Nothing changes configuration or
+  touches funds. Rate limits (min interval, hourly cap never dropping replies), `notifications_log`,
+  restart-safe cursors in `telegram_state` (migration `009_telegram`). The token never reaches logs.
+- Setup: README "Optional services". Tests: `test/phase12.test.ts` (11).
+
+## Phase 13 — Indicators + conditional LLM layer (addendum 6) ✅
+- Indicators from our own 5m OHLCV (15m aggregated), look-ahead safe (only closed candles):
+  RSI, Supertrend, Bollinger %B, Fibonacci position → regime features with weight 0 until the grid
+  proves them. Grid dimension `entry_filter` (none, supertrend_break, rsi_reversal,
+  bollinger_reversion) inside the balanced sample; report section "with vs without filter".
+- LLM layer (`src/llm/`), **off** and inactive until 10 clean sessions since phase 10:
+  Anthropic SDK (`claude-opus-5-5`, structured outputs, effort `low`, server-side refusal fallback
+  `fallbacks: "default"`) or an OpenAI-compatible / local endpoint (temperature 0). Daily budget
+  ($1) and hourly cap, cache per role + token + input, sanitized external text as data, strict
+  schema validation (invalid output rejected, logged), every call in `llm_calls` (migration
+  `010_llm`), prompt version in the config. Roles: token social quality (safety feature), narrative
+  (attention feature; idle — no free post source), explainer for the briefing. `dlmm llm status`.
+  With / without LLM features: replay variant `config/variants/llm-on.yaml`.
+- Not called live (no API key here; every call costs money) — provider request shapes are tested
+  with mocked HTTP. Tests: `test/phase13.test.ts` (18). 215 tests total.
+- Next per the addendum: after enough sessions, `dlmm calibrate` and `dlmm calibrate --source real_lp`.
 
 ## RPC: Helius Free + swap stream redesign (2026-09-29)
 - `.env` points to Helius (Free: 1M credits/month, 10 rps). Rate limits: critical 3 rps +
