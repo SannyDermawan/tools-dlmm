@@ -1,6 +1,7 @@
 import type { Config } from "../config/schema.ts";
 import type { Db } from "../db/index.ts";
 import { loadPoolMeta } from "../collectors/discovery.ts";
+import { transferFeeLookup } from "../features/safetyData.ts";
 import { MemorySink, PoolSimulator } from "../sim/engine.ts";
 import type { PositionSpec } from "../sim/position.ts";
 import { loadReplay } from "../sim/replay.ts";
@@ -148,6 +149,8 @@ export function runRealismChecks(db: Db, c: Config, o: { dataSessionId?: string;
       if (r.sides === "two_sided" && r.deposit_x_usd !== null && r.deposit_usd > 0) cfg.simulation.two_sided_x_value_fraction = Math.min(1, Math.max(0, r.deposit_x_usd / r.deposit_usd));
       const sink = new MemorySink();
       const sim = new PoolSimulator(meta, cfg, sink, () => `real-${r.position}`);
+      const feeOf = transferFeeLookup(db);
+      sim.transferFeeBps = (token) => feeOf(token, r.opened_at);
       const sims = new Map([[r.pool, sim]]);
       const events = loadReplay(db, {
         pools: [r.pool], from: s.start_at, to: r.closed_at,

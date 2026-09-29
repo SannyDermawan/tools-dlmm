@@ -206,7 +206,13 @@ simulation:
                                    # as_needed: assume the needed tokens are already held
   two_sided_x_value_fraction: auto # share of capital placed as X for two-sided positions;
                                    # auto = ask-side bins / all bins (uniform value per bin for Spot)
-  exit_to: none                    # none | quote  (quote: swap X back to quote on close, cost applies)
+  exit_to: quote                   # none | quote. quote: the tokens left in the position are swapped back to the
+                                   # quote token on close, at the swap cost of that moment and size. none marks them at
+                                   # the mid price (the Meteora tracker does): what a position is worth, not what it
+                                   # yields. quote is the default: a thin pool after a dump cannot be sold at mid.
+  size_limit:                      # position size vs pool liquidity (TVL at the open)
+    mode: flag                     # flag: journal + report by size bucket | cap: shrink to max | skip: do not open
+    max_pct_of_tvl: 2              # a swap above 1-2% of the liquidity moves the price noticeably
   fee_event_interval_seconds: 300  # how often a 'fee' event is journaled per position
   pnl_eval_seconds: 30             # TP / SL / trailing / low-yield / variants evaluated this often
   gap_taint:                       # when a data gap makes a position unusable for calibration
@@ -230,6 +236,12 @@ simulation:
     tx_failure_rate: 0.05          # failed tx still pays base + priority fee
     slippage_margin_pct: 0.1       # added on top of the swap cost (quote -> execution drift)
     swap_model: aggregator         # aggregator: Jupiter round-trip quotes (how real LPs swap); pool: the DLMM pool fee
+    size_impact:                   # extra price impact of a swap larger than the quoted trade, at the TVL of that moment
+      enabled: true                # extra % = notional / (depth_factor x TVL) - quote_notional / (depth_factor x TVL)
+      depth_factor: 2              # constant-product: selling V into a pool worth TVL (half per side) moves ~ V / (TVL / 2)
+      max_pct: 30                  # never above this (a wall of sell orders into a dry pool)
+    transfer_tax: true             # token-2022 transfer fee (token_security) on every transfer of that token: deposit,
+                                   # withdrawal, claim and each swap leg. Rare on memecoins; the fee cap per transfer is ignored
     aggregator:
       quote_notional_usd: 500      # typical balancing swap of a $1000 position
       quote_interval_minutes: 5
@@ -288,6 +300,14 @@ grid:
     wide_range: { bins_per_side: [69, 100, 150], strategy: spot }  # own widths; bins_per_side ignored
   cooldown_enabled: [true, false] # signal modes run with and without pool cooldown (baseline: never)
   cooldown_min_session_minutes: 120 # shorter sessions: cooldown dimension off (4-12 h cooldowns cannot trigger)
+  signal_entry:                 # when the signal modes (signal_enter / signal_watch) open positions
+    trigger: cohort             # cohort: at the cohort times (as before) | event: when a pool's signal turns
+                                # admitted (a rising edge: LEWATI / other -> MASUK, or PANTAU for signal_watch)
+                                # | both: cohorts and events (positions carry entry_trigger, compare them in the report)
+    min_gap_minutes: 15         # per pool and mode between two entries (cohort or event)
+    max_per_pool: 6             # event entries per pool and mode in one session
+    require_flow_confirm: false # an event enters only while Friday's one-minute flow confirmation passes
+    flow_wait_minutes: 10       # ... waiting up to this long for it, as long as the signal stays admitted
   entry_filter: [none]          # indicator entry filters (phase 13), on hold until sessions carry enough
                                 # candles: [none, supertrend_break, rsi_reversal, bollinger_reversion]
   sampling:                     # the full grid is huge: balanced random sample of combinations,
@@ -312,6 +332,17 @@ memory:                          # pool / token memory across sessions (phase 10
     oor_hours: 12
     modes: [signal_enter]        # closes of these entry modes drive the cooldown
   min_positions_for_features: 5  # pool history features need at least this many positions
+
+portfolio:                       # sequential account: one position at a time, compounding, daily stop (dlmm portfolio)
+  start_capital_usd: 1000
+  size_fraction: 1               # share of the equity per trade
+  max_trade_usd: 5000            # trade size cap (a bigger swap moves the price); null = none
+  daily_stop_pct: 0              # 0 = off; e.g. 5: no new trades after a realized loss of 5% of the day's start equity
+  tz: WIB                        # the day boundary of the calendar
+  pick: first                    # several positions opening together: first | random | score (highest signal score)
+  window_seconds: 60             # positions opening within this window are one opportunity
+  report_modes: [friday_scalp, meridian_preset]   # modes summarized in the session report
+  report_min_trades: 5
 
 indicators:                      # chart indicators from our own OHLCV (phase 13); regime features + entry filters
   enabled: true

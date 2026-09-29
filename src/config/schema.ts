@@ -365,6 +365,7 @@ export const ConfigSchema = z
         starting_asset: z.enum(["quote", "as_needed"]),
         two_sided_x_value_fraction: z.union([z.literal("auto"), frac]),
         exit_to: z.enum(["none", "quote"]),
+        size_limit: z.object({ mode: z.enum(["flag", "cap", "skip"]), max_pct_of_tvl: pos }).strict(),
         fee_event_interval_seconds: pos,
         pnl_eval_seconds: pos,
         gap_taint: z
@@ -391,6 +392,8 @@ export const ConfigSchema = z
             aggregator: z
               .object({ quote_notional_usd: pos, quote_interval_minutes: pos, fallback_cost_pct: nonneg, max_quote_age_minutes: pos })
               .strict(),
+            size_impact: z.object({ enabled: z.boolean(), depth_factor: pos, max_pct: nonneg }).strict(),
+            transfer_tax: z.boolean(),
             position_base_rent_sol: nonneg,
             position_default_bins: z.number().int().min(1),
             bins_per_tx: z.number().int().min(1),
@@ -438,6 +441,16 @@ export const ConfigSchema = z
           .strict(),
         cooldown_enabled: z.array(z.boolean()).min(1).default([false]),
         cooldown_min_session_minutes: nonneg.default(0),
+        signal_entry: z
+          .object({
+            trigger: z.enum(["cohort", "event", "both"]),
+            min_gap_minutes: nonneg,
+            max_per_pool: z.number().int().min(1),
+            require_flow_confirm: z.boolean(),
+            flow_wait_minutes: pos,
+          })
+          .strict()
+          .default({ trigger: "cohort", min_gap_minutes: 15, max_per_pool: 6, require_flow_confirm: false, flow_wait_minutes: 10 }),
         entry_filter: z.array(z.enum(["none", "supertrend_break", "rsi_reversal", "bollinger_reversion", "flow_confirm"])).min(1).default(["none"]),
         cohort_interval_minutes: nonneg,
         max_positions: z.number().int().min(1),
@@ -456,6 +469,19 @@ export const ConfigSchema = z
           })
           .strict(),
         min_positions_for_features: z.number().int().min(1),
+      })
+      .strict(),
+    portfolio: z
+      .object({
+        start_capital_usd: pos,
+        size_fraction: frac,
+        max_trade_usd: pos.nullable(),
+        daily_stop_pct: nonneg,
+        tz: z.enum(["WIB", "UTC"]),
+        pick: z.enum(["first", "random", "score"]),
+        window_seconds: pos,
+        report_modes: z.array(z.string()),
+        report_min_trades: z.number().int().min(1),
       })
       .strict(),
     indicators: z

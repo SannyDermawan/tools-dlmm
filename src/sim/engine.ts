@@ -61,6 +61,8 @@ export interface MarketContext {
   /** aggregator one-way swap cost (%) of this pool and when it was quoted */
   swapCostPct?: number | null;
   swapQuoteTs?: number | null;
+  /** pool TVL (USD) from the latest metrics: the depth a swap of our size moves */
+  tvlUsd?: number | null;
 }
 
 /** Sources whose gaps make a position's result unreliable for calibration. */
@@ -133,6 +135,26 @@ export class PoolSimulator {
       this.market.swapCostPct = m.swapCostPct;
       this.market.swapQuoteTs = m.swapQuoteTs ?? this.now;
     }
+    if (m.tvlUsd != null && m.tvlUsd > 0) this.market.tvlUsd = m.tvlUsd;
+  }
+
+  /**
+   * Transfer fee (bps) of a token-2022 mint, 0 when none / unknown. Set by the session or replay
+   * (token_security); the simulator itself never reads the database.
+   */
+  transferFeeBps: (token: string) => number | null = () => null;
+
+  /** Tax (USD) when `usd` of `token` moves once (deposit, withdrawal, claim or one swap leg). */
+  private taxUsd(token: string, usd: number): number {
+    if (!this.sim.costs.transfer_tax || usd <= 0) return 0;
+    const bps = this.transferFeeBps(token);
+    return bps ? (usd * bps) / 10_000 : 0;
+  }
+
+  /** transfer_tax cost item for `legsX` moves of the X value and `legsY` moves of the Y value (null when none). */
+  private taxItem(xUsd: number, yUsd: number, label = "transfer_tax"): CostItem | null {
+    const usd = this.taxUsd(this.meta.tokenX, xUsd) + this.taxUsd(this.meta.tokenY, yUsd);
+    return usd > 0 ? { type: label, usd, refundable: false, detail: { xUsd, yUsd } } : null;
   }
 
   /**
@@ -140,12 +162,31 @@ export class PoolSimulator {
    * quote (fresh within max_quote_age_minutes), else the fallback capped by the pool fee (the
    * aggregator never routes worse than this pool); pool model: the DLMM pool fee.
    */
-  swapRate(poolFeeRate: number): number {
+  swapRate(poolFeeRate: number, notionalUsd = 0): number {
     const k = this.sim.costs;
-    if (k.swap_model === "pool") return poolFeeRate;
-    const q = this.market.swapCostPct;
-    const fresh = q != null && this.market.swapQuoteTs != null && this.now - this.market.swapQuoteTs <= k.aggregator.max_quote_age_minutes * 60_000;
-    return fresh ? Math.min(q! / 100, poolFeeRate) : Math.min(k.aggregator.fallback_cost_pct / 100, poolFeeRate);
+    let rate: number;
+    if (k.swap_model === "pool") rate = poolFeeRate;
+    else {
+      const q = this.market.swapCostPct;
+      const fresh = q != null && this.market.swapQuoteTs != null && this.now - this.market.swapQuoteTs <= k.aggregator.max_quote_age_minutes * 60_000;
+      rate = fresh ? Math.min(q! / 100, poolFeeRate) : Math.min(k.aggregator.fallback_cost_pct / 100, poolFeeRate);
+    }
+    return rate + this.sizeImpact(notionalUsd);
+  }
+
+  /**
+   * Extra price impact (fraction) of a swap larger than the quoted trade, at the pool's TVL of this
+   * moment (constant-product depth: V / (depth_factor x TVL)); the quote / pool-fee part already
+   * covers a trade of `quote_notional_usd`, so only the excess is added. Taken at the time of the
+   * swap, so a dump that emptied the pool makes the exit expensive.
+   */
+  sizeImpact(notionalUsd: number): number {
+    const k = this.sim.costs;
+    const tvl = this.market.tvlUsd;
+    if (!k.size_impact.enabled || !tvl || notionalUsd <= 0) return 0;
+    const at = (v: number) => v / (k.size_impact.depth_factor * tvl);
+    const extra = Math.max(0, at(notionalUsd) - at(k.aggregator.quote_notional_usd));
+    return Math.min(k.size_impact.max_pct / 100, extra);
   }
 
   onState(u: PoolStateUpdate) {
@@ -284,7 +325,22 @@ export class PoolSimulator {
     const quoteUsd = this.market.quoteUsd!;
     const priceUi = st.priceUi;
     const xFrac = xValueFraction(r, this.sim.two_sided_x_value_fraction);
+    // size vs pool liquidity (simulation.size_limit): journal, shrink or refuse
+    const tvl = this.market.tvlUsd ?? null;
+    const lim = this.sim.size_limit;
+    if (tvl) {
+      const maxUsd = (tvl * lim.max_pct_of_tvl) / 100;
+      if (p.spec.capitalUsd > maxUsd) {
+        if (lim.mode === "skip") return this.fail(p, "oversized_vs_tvl", ts);
+        if (lim.mode === "cap") {
+          p.cappedFromUsd = p.spec.capitalUsd;
+          p.spec.capitalUsd = Math.max(1, maxUsd);
+        }
+      }
+    }
     const cap = p.spec.capitalUsd;
+    p.tvlOpenUsd = tvl;
+    p.sizePctTvl = tvl ? (cap / tvl) * 100 : null;
     const placed = this.place(p, r, cap, xFrac);
     p.x0 = placed.x;
     p.y0 = placed.y;
@@ -310,8 +366,11 @@ export class PoolSimulator {
     const ba = this.costs.binArrayInit(p.lower, p.upper, this.snap?.missingBinArrays ?? [], ctx);
     if (ba) items.push(ba);
     if (this.sim.starting_asset === "quote" && xFrac > 0) {
-      items.push(this.costs.txCost("swap", ctx), this.costs.swapCost(cap * xFrac, this.swapRate(st.feeRateTotal)));
+      items.push(this.costs.txCost("swap", ctx), this.costs.swapCost(cap * xFrac, this.swapRate(st.feeRateTotal, cap * xFrac)));
     }
+    // token-2022 transfer fee: the X part is received from the swap (when bought) and deposited; Y is deposited
+    const tax = this.taxItem(cap * xFrac * (this.sim.starting_asset === "quote" ? 2 : 1), cap * (1 - xFrac));
+    if (tax) items.push(tax);
     const activeL = p.liquidityAt(st.activeId);
     if (activeL > 0) {
       const depFx = p.spec.sides === "base_only" ? 1 : 0; // SDK: two-sided puts Y in the active bin
@@ -328,6 +387,7 @@ export class PoolSimulator {
         activeId: st.activeId, price: priceUi, quoteUsd, lower: p.lower, upper: p.upper, bins: n, xFrac,
         depositX: p.x0 / 10 ** m.decimalsX, depositY: p.y0 / 10 ** m.decimalsY,
         idleX: p.idleX / 10 ** m.decimalsX, idleY: p.idleY / 10 ** m.decimalsY,
+        tvlUsd: tvl, sizePctTvl: p.sizePctTvl, cappedFromUsd: p.cappedFromUsd,
         valueUsd: v.valueUsd, delayMs: ts - p.requestedAt,
         costs: items.map((c) => ({ type: c.type, usd: c.usd, refundable: c.refundable })),
       },
@@ -377,7 +437,8 @@ export class PoolSimulator {
     const notional = Math.abs(heldXUsd - liquid * xFrac);
     const ctx = this.costCtx();
     let usd = this.costs.txCost("rebalance", ctx, binCount(r)).usd;
-    if (notional > 0.01) usd += this.costs.txCost("swap", ctx).usd + this.costs.swapCost(notional, this.swapRate(st.feeRateTotal)).usd;
+    if (notional > 0.01) usd += this.costs.txCost("swap", ctx).usd + this.costs.swapCost(notional, this.swapRate(st.feeRateTotal, notional)).usd;
+    usd += this.taxItem(heldXUsd + liquid * xFrac + notional, liquid - heldXUsd + liquid * (1 - xFrac) + notional)?.usd ?? 0;
     const d = deltaRange(r);
     const ba = this.costs.binArrayInit(st.activeId + d.minDelta, st.activeId + d.maxDelta, this.snap?.missingBinArrays ?? [], ctx);
     if (ba) usd += ba.usd;
@@ -409,7 +470,10 @@ export class PoolSimulator {
     const ctx = this.costCtx();
     const items: CostItem[] = [this.costs.txCost("rebalance", ctx, binCount(r))];
     const notional = Math.abs(heldXUsd - targetXUsd);
-    if (notional > 0.01) items.push(this.costs.txCost("swap", ctx), this.costs.swapCost(notional, this.swapRate(st.feeRateTotal)));
+    if (notional > 0.01) items.push(this.costs.txCost("swap", ctx), this.costs.swapCost(notional, this.swapRate(st.feeRateTotal, notional)));
+    // transfer fee: withdraw everything, redeploy the target, plus the swap leg
+    const rtax = this.taxItem(heldXUsd + targetXUsd + notional, Math.max(0, liquidUsd - heldXUsd) + (liquidUsd - targetXUsd) + notional);
+    if (rtax) items.push(rtax);
     const ba = this.costs.binArrayInit(p.lower, p.upper, this.snap?.missingBinArrays ?? [], ctx);
     if (ba) items.push(ba);
     const activeL = p.liquidityAt(st.activeId);
@@ -454,10 +518,14 @@ export class PoolSimulator {
     p.realizedQuote += withdrawnQuote;
     p.partialExits++;
     const items: CostItem[] = [this.costs.txCost("close", this.costCtx(), p.upper - p.lower + 1)];
+    const pq = this.market.quoteUsd ?? p.entryQuoteUsd;
+    const wxUsd = ((c.x * fraction) / 10 ** m.decimalsX) * st.priceUi * pq;
+    const wyUsd = ((c.y * fraction) / 10 ** m.decimalsY) * pq;
     if (this.sim.exit_to === "quote") {
-      const xUsd = ((c.x * fraction) / 10 ** m.decimalsX) * st.priceUi * (this.market.quoteUsd ?? p.entryQuoteUsd);
-      if (xUsd > 0) items.push(this.costs.swapCost(xUsd, this.swapRate(st.feeRateTotal), "exit_swap"));
+      if (wxUsd > 0) items.push(this.costs.swapCost(wxUsd, this.swapRate(st.feeRateTotal, wxUsd), "exit_swap"));
     }
+    const ptax = this.taxItem(wxUsd + (this.sim.exit_to === "quote" ? wxUsd : 0), wyUsd + (this.sim.exit_to === "quote" ? wxUsd : 0));
+    if (ptax) items.push(ptax);
     p.costs.push(...items);
     this.acted(p, ts);
     this.sink.event({
@@ -522,7 +590,10 @@ export class PoolSimulator {
     const ctx = this.costCtx();
     const bins = p.upper - p.lower + 1;
     const items: CostItem[] = [this.costs.txCost("claim", ctx, bins), this.costs.txCost("add", ctx, bins)];
-    if (notional > 0.01) items.push(this.costs.txCost("swap", ctx), this.costs.swapCost(notional, this.swapRate(st.feeRateTotal)));
+    if (notional > 0.01) items.push(this.costs.txCost("swap", ctx), this.costs.swapCost(notional, this.swapRate(st.feeRateTotal, notional)));
+    // transfer fee: claim the fees, swap the mismatch, deposit them again
+    const ctax = this.taxItem(feeXUsd + xShare * v.feeUsd + notional, Math.max(0, v.feeUsd - feeXUsd) + (1 - xShare) * v.feeUsd + notional);
+    if (ctax) items.push(ctax);
     p.costs.push(...items);
     this.acted(p, ts);
     this.sink.event({
@@ -605,10 +676,18 @@ export class PoolSimulator {
     const st = this.state!;
     const exitCosts: CostItem[] = [this.costs.txCost("close", ctx, p.upper - p.lower + 1)];
     const pre = this.valuation(p);
+    const cq = this.market.quoteUsd ?? p.entryQuoteUsd;
+    const xUsd = (pre.x / 10 ** this.meta.decimalsX) * st.priceUi * cq;
+    const yUsd = (pre.y / 10 ** this.meta.decimalsY) * cq;
     if (this.sim.exit_to === "quote") {
-      const xUsd = (pre.x / 10 ** this.meta.decimalsX) * st.priceUi * (this.market.quoteUsd ?? p.entryQuoteUsd);
-      if (xUsd > 0) exitCosts.push(this.costs.txCost("swap", ctx), this.costs.swapCost(xUsd, this.swapRate(st.feeRateTotal), "exit_swap"));
+      if (xUsd > 0) exitCosts.push(this.costs.txCost("swap", ctx), this.costs.swapCost(xUsd, this.swapRate(st.feeRateTotal, xUsd), "exit_swap"));
     }
+    // transfer fee: withdrawal and claim of both tokens, and the swap leg when the tokens are sold
+    const feeXUsd = (p.feeX / 10 ** this.meta.decimalsX) * st.priceUi * cq;
+    const feeYUsd = (p.feeY / 10 ** this.meta.decimalsY) * cq;
+    const legs = this.sim.exit_to === "quote" ? xUsd : 0;
+    const ctax = this.taxItem(xUsd + feeXUsd + legs, yUsd + feeYUsd + legs);
+    if (ctax) exitCosts.push(ctax);
     p.costs.push(...exitCosts);
     const v = this.valuation(p);
     p.status = "closed";
@@ -653,6 +732,10 @@ export class PoolSimulator {
         compoundedFeeUsd: p.compoundedFeeUsd,
         feeAttribution: this.sim.fee_attribution,
         costs: p.costs.map((c) => ({ type: c.type, usd: c.usd, refundable: c.refundable })),
+        sizePctTvl: p.sizePctTvl,
+        tvlOpenUsd: p.tvlOpenUsd,
+        tvlCloseUsd: this.market.tvlUsd ?? null,
+        cappedFromUsd: p.cappedFromUsd,
         gapTainted: p.gapTainted,
         gapMinutes: p.taint ? p.taint.gapMs / 60_000 : 0,
         gapFraction: p.taint?.fraction ?? 0,

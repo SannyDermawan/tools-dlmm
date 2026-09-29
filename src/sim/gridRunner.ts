@@ -196,6 +196,8 @@ export interface GridStats {
   deferredEntries: number;
   /** positions not opened because their indicator entry filter did not pass, by filter and reason (phase 13) */
   filterSkips: Record<string, number>;
+  /** event entries of the signal modes (grid.signal_entry): rising edges seen, entries made, what stopped the rest */
+  events: { detected: number; opened: number; skipped: Record<string, number> };
   capped: boolean;
 }
 
@@ -256,8 +258,15 @@ export class GridRunner {
   readonly stats: GridStats = {
     cohorts: 0, requested: 0, skippedPools: 0, rebalances: 0, policyExits: 0, rebalanceNotWorth: 0, signalEntries: {}, pnlExits: {},
     variantActions: { partial_harvest: 0, fee_compounding: 0, single_sided_reseed: 0 },
-    preset: { evaluated: 0, passed: 0, opened: 0, partial: 0 }, friday: { evaluated: 0, opened: 0, reentries: 0, failed: {} }, cooldownSkips: 0, filterSkips: {}, deferredEntries: 0, capped: false,
+    preset: { evaluated: 0, passed: 0, opened: 0, partial: 0 }, friday: { evaluated: 0, opened: 0, reentries: 0, failed: {} }, cooldownSkips: 0, filterSkips: {}, deferredEntries: 0, events: { detected: 0, opened: 0, skipped: {} }, capped: false,
   };
+  /** latest signal action per pool at the previous scoring round (rising-edge detection) */
+  private readonly lastAction = new Map<string, string | null>();
+  /** last entry time and event-entry count per pool and signal mode */
+  private readonly lastEntry = new Map<string, number>();
+  private readonly eventCount = new Map<string, number>();
+  /** events waiting for the flow confirmation: key pool|mode -> first seen */
+  private readonly pendingEvents = new Map<string, number>();
 
   constructor(
     private readonly c: Config,
@@ -295,6 +304,7 @@ export class GridRunner {
     if (ts - this.lastEval >= this.c.simulation.pnl_eval_seconds * 1000) {
       this.lastEval = ts;
       this.evaluate(ts);
+      this.retryPendingEvents(ts);
       // Friday playbook: a new scalp in a pool reentry.minutes after the previous one closed
       if (this.friday && this.cohort > 0 && this.clock.phase(ts) === "active") this.openFriday(ts, this.cohort, true);
     }
@@ -373,9 +383,11 @@ export class GridRunner {
   }
 
   /** Open the grid of one pool for a cohort. Returns true when grid.max_positions was reached. */
-  private openPool(sim: PoolSimulator, ts: number, cohortNo: number): boolean {
+  private openPool(sim: PoolSimulator, ts: number, cohortNo: number, event?: { modes: Set<string> }): boolean {
     this.lastOpened = 0;
     let opened = 0;
+    const trigger = event ? "event" : "cohort";
+    const sigEntry = this.c.grid.signal_entry;
     {
       const sig = this.signals?.book.latestFor(sim.meta.pool, ts) ?? null;
       const rec = sig?.recommendation ?? null;
@@ -384,6 +396,9 @@ export class GridRunner {
       const filterOk = new Map<string, boolean>();
       let taken = false;
       for (const spec of this.combos) {
+        const signalMode = COOLDOWN_MODES.has(spec.entryMode);
+        if (event && !event.modes.has(spec.entryMode)) continue; // an event opens only the mode it belongs to
+        if (!event && signalMode && sigEntry.trigger === "event") continue; // signal modes wait for their events
         if (!this.admits(spec.entryMode, sig?.action ?? null)) continue;
         if (spec.cooldownEnabled && cooldown) {
           this.stats.cooldownSkips++;
@@ -421,7 +436,7 @@ export class GridRunner {
             signalId: sig?.signal_id ?? null,
             combo: {
               ...spec.combo, cohort: cohortNo, signal_action: sig?.action ?? null, signal_score: sig?.final_score ?? null,
-              matches_recommendation: matches,
+              matches_recommendation: matches, ...(signalMode ? { entry_trigger: trigger } : {}),
             },
           },
           ts,
@@ -430,6 +445,7 @@ export class GridRunner {
           taken = true;
           this.stats.signalEntries[spec.entryMode] = (this.stats.signalEntries[spec.entryMode] ?? 0) + 1;
         }
+        if (signalMode) this.lastEntry.set(`${sim.meta.pool}|${spec.entryMode}`, ts);
         this.stats.requested++;
         opened++;
       }
@@ -686,9 +702,75 @@ export class GridRunner {
 
   /** After each scoring round: exit engine rules for exit_engine positions. */
   onScores(ts: number) {
+    this.detectEvents(ts);
     const ee = this.signals?.exitEngine;
     if (!ee) return;
     for (const sim of this.sims.values()) ee.run(sim, ts);
+  }
+
+  /**
+   * Event entries of the signal modes (grid.signal_entry.trigger event | both): a pool's signal
+   * turning admitted (a rising edge) opens that mode's grid in the pool right away instead of at
+   * the next cohort. Limits: min_gap_minutes between entries of a pool and mode (cohort entries
+   * count), max_per_pool events per session; optionally Friday's flow confirmation must pass
+   * (waiting up to flow_wait_minutes while the signal stays admitted). The pool's data must be
+   * fresh; otherwise the edge is seen again on the next round.
+   */
+  private detectEvents(ts: number) {
+    const se = this.c.grid.signal_entry;
+    if (!this.signals || se.trigger === "cohort" || this.cohort === 0 || this.clock.phase(ts) !== "active") return;
+    const modes = [...new Set(this.combos.map((s) => s.entryMode))].filter((m) => COOLDOWN_MODES.has(m));
+    if (!modes.length) return;
+    const skip = (why: string) => (this.stats.events.skipped[why] = (this.stats.events.skipped[why] ?? 0) + 1);
+    for (const sim of this.sims.values()) {
+      if (!sim.ready || sim.priceStale(ts)) continue;
+      const pool = sim.meta.pool;
+      const sig = this.signals.book.latestFor(pool, ts);
+      const prev = this.lastAction.get(pool) ?? null;
+      const now = sig?.action ?? null;
+      if (sig) this.lastAction.set(pool, now);
+      for (const mode of modes) {
+        const key = `${pool}|${mode}`;
+        const edge = this.admits(mode, now) && !this.admits(mode, prev) && !!sig;
+        if (edge) {
+          this.stats.events.detected++;
+          if (se.require_flow_confirm) this.pendingEvents.set(key, ts);
+        }
+        const pending = this.pendingEvents.has(key);
+        if (!edge && !pending) continue;
+        if (pending && (!this.admits(mode, now) || ts - this.pendingEvents.get(key)! > se.flow_wait_minutes * 60_000)) {
+          this.pendingEvents.delete(key);
+          skip(this.admits(mode, now) ? "flow_confirm_timeout" : "signal_gone");
+          continue;
+        }
+        if (se.require_flow_confirm) {
+          const snap = this.signals.flow?.(pool, ts) ?? null;
+          const fc = snap ? flowConfirm(snap, FRIDAY_CONFIRM) : null;
+          if (!fc?.pass) continue; // keep waiting (pending); no flow data behaves like "not confirmed"
+        }
+        this.pendingEvents.delete(key);
+        const last = this.lastEntry.get(key);
+        if (last !== undefined && ts - last < se.min_gap_minutes * 60_000) {
+          skip("min_gap");
+          continue;
+        }
+        const n = this.eventCount.get(key) ?? 0;
+        if (n >= se.max_per_pool) {
+          skip("max_per_pool");
+          continue;
+        }
+        this.eventCount.set(key, n + 1);
+        const before = this.stats.requested;
+        this.openPool(sim, ts, this.cohort, { modes: new Set([mode]) });
+        if (this.stats.requested > before) this.stats.events.opened++;
+        else skip("nothing_opened"); // cooldown / filters / cap
+      }
+    }
+  }
+
+  /** Waiting events (flow confirmation) are re-checked between scoring rounds too. */
+  private retryPendingEvents(ts: number) {
+    if (this.pendingEvents.size) this.detectEvents(ts);
   }
 
   /** Force-close every open position (session end, or shutdown). */

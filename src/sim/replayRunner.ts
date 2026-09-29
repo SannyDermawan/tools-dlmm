@@ -8,6 +8,7 @@ import { loadReplay, type ReplayEvent } from "./replay.ts";
 import { DbSimSink } from "./store.ts";
 import { buildDecisionStack } from "../signals/stack.ts";
 import { swapPoolsOf } from "../features/runner.ts";
+import { transferFeeLookup } from "../features/safetyData.ts";
 
 export interface ReplayRunOptions {
   sourceSessionId: string;
@@ -44,7 +45,7 @@ export function dispatch(e: ReplayEvent, sims: Map<string, PoolSimulator>, runne
       break;
     case "metrics": {
       const s = sims.get(e.pool);
-      if (s) s.onMarket({ quoteUsd: e.tokenYUsd ?? (stable.has(s.meta.tokenY) ? 1 : null) });
+      if (s) s.onMarket({ quoteUsd: e.tokenYUsd ?? (stable.has(s.meta.tokenY) ? 1 : null), tvlUsd: e.tvlUsd ?? null });
       break;
     }
     case "gap":
@@ -89,7 +90,13 @@ export function runReplay(app: AppContext, o: ReplayRunOptions): ReplayRunResult
     notes: JSON.stringify({ fee_attribution: cfg.simulation.fee_attribution, timing }),
   });
   const sink = new DbSimSink(db, sessionId, app.configVersion);
-  const sims = new Map(metas.map((m) => [m.pool, new PoolSimulator(m, cfg, sink)]));
+  const feeOf = transferFeeLookup(db);
+  const newSim = (m: (typeof metas)[number]) => {
+    const s = new PoolSimulator(m, cfg, sink);
+    s.transferFeeBps = (token) => feeOf(token, s.now || from);
+    return s;
+  };
+  const sims = new Map(metas.map((m) => [m.pool, newSim(m)]));
   const stack = o.signals === false
     ? null
     : buildDecisionStack(db, cfg, app.configVersion, sessionId, metas, from, swapPoolsOf(db, src.session_id));
@@ -127,6 +134,9 @@ export function runReplay(app: AppContext, o: ReplayRunOptions): ReplayRunResult
       if (p.status === "closed") closed++;
       if (p.status === "failed") failed++;
     }
-  finishSession(db, sessionId, "completed", { poolCount: metas.length });
+  finishSession(db, sessionId, "completed", {
+    poolCount: metas.length,
+    notes: JSON.stringify({ fee_attribution: cfg.simulation.fee_attribution, timing, grid: runner.stats, signals: stack?.book.count ?? 0, exitEngine: stack?.exitEngine.stats ?? null }),
+  });
   return { sessionId, positions, closed, failed, timing, grid: runner.stats, signals: stack?.book.count ?? 0, exitEngine: stack?.exitEngine.stats ?? null };
 }

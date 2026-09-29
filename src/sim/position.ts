@@ -63,6 +63,10 @@ export class VirtualPosition {
   entryActiveId = 0;
   entryPriceUi = 0;
   entryQuoteUsd = 0;
+  /** pool TVL at the open and the position's size as % of it (null: TVL unknown); size_limit journals it */
+  tvlOpenUsd: number | null = null;
+  sizePctTvl: number | null = null;
+  cappedFromUsd: number | null = null;
   feeX = 0; // raw, accrued
   feeY = 0;
   costs: CostItem[] = [];
