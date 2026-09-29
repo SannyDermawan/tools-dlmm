@@ -68,6 +68,9 @@ export const FEATURE_SPECS: FeatureSpec[] = [
   { name: "token_age_hours", module: "context", direction: 0, description: "hours since the token's first pool (Jupiter)" },
   { name: "pool_hist_net_pct", module: "edge", direction: 0, description: "pool memory: mean net PnL % of past baseline positions" },
   { name: "pool_hist_win_rate", module: "edge", direction: 0, description: "pool memory: win rate of past baseline positions" },
+  // ---- phase 11: real LP positions of other wallets
+  { name: "smart_lp_present", module: "competition", direction: 1, description: "1 when a smart LP wallet (real positions) holds an open position in the pool" },
+  { name: "smart_lp_count", module: "context", direction: 0, description: "smart LP wallets with an open position in the pool" },
   { name: "requires_bin_array_init", module: "context", direction: 0, description: "1 when a bin array near the price is not initialized (opening costs rent)" },
   { name: "priority_fee_p75", module: "context", direction: 0, description: "priority fee p75 (micro-lamports/CU)" },
   { name: "macro_event_window", module: "context", direction: 0, description: "1 inside +-X min of a scheduled macro event" },
@@ -125,6 +128,8 @@ export interface ComputeContext {
   /** phase 10: Jupiter audit and pool memory; optional */
   audit?: (token: string, t: number) => AuditRow | null;
   memory?: MemoryView;
+  /** phase 11: smart LP presence (optional) */
+  smartLp?: { at(pool: string, t: number): { count: number; openPositions: number } | null };
 }
 
 /** Look-ahead-safe view of the pool memory (phase 10). */
@@ -289,6 +294,9 @@ export function computeFeatures(tr: PoolTracker, cx: ComputeContext): RawFeature
   const memOk = mem && mem.positions >= c.memory.min_positions_for_features;
   set("pool_hist_net_pct", memOk ? mem!.avgNetPct : null, 0);
   set("pool_hist_win_rate", memOk ? mem!.winRate : null, 0);
+  const slp = cx.smartLp?.at(tr.meta.pool, t) ?? null;
+  set("smart_lp_present", slp ? (slp.count > 0 ? 1 : 0) : null, 0);
+  set("smart_lp_count", slp?.count ?? null, 0);
   set("requires_bin_array_init", tr.snap ? (tr.snap.missingBinArrays.length ? 1 : 0) : null, age(tr.snap?.ts, "bin_snapshot"));
 
   // ---- context

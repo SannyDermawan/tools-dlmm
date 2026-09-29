@@ -38,6 +38,7 @@ rpc:
       getMultipleAccounts: 1
       getSignaturesForAddress: 1
       getTokenLargestAccounts: 1
+      getProgramAccounts: 10       # Helius: 10 credits (real LP scans, phase 11)
   ws:
     heartbeat_seconds: 20
     reconnect_base_delay_ms: 1000
@@ -264,6 +265,42 @@ memory:                          # pool / token memory across sessions (phase 10
     modes: [signal_enter]        # closes of these entry modes drive the cooldown
   min_positions_for_features: 5  # pool history features need at least this many positions
 
+telegram:                        # read-only notifications + commands (phase 12)
+  enabled: false                 # needs TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_ALLOWED_USER_IDS in .env
+  in_session: true               # a live session runs the bot too (else: `dlmm telegram run` in another terminal)
+  min_signal_score: 80
+  min_confidence: 0.7
+  signal_actions: [MASUK]
+  daily_briefing_time_wib: "08:00"
+  poll_seconds: 15               # database watch interval (signals, sessions, alerts)
+  batch_seconds: 60              # signals of this window go into one message
+  min_interval_seconds: 3        # between two messages
+  max_messages_per_hour: 30      # beyond this, non-command messages are dropped (logged)
+  alerts:
+    gap_minutes: 5               # a data gap open this long -> alert
+    quota_pct: 80                # RPC credits used (of the plan) -> alert
+    ws_down_minutes: 5
+    heartbeat_stale_minutes: 5   # a running session without heartbeat -> alert (hung?)
+    repeat_minutes: 60           # the same alert at most once per this window
+
+real_lp:                         # real LP positions of other wallets (phase 11)
+  enabled: true
+  scan_minutes: 30               # on-chain scan of open positions per pool (getProgramAccounts by lb_pair)
+  max_wallet_queries_per_scan: 40   # Meteora Data API /positions/{pool}/pnl calls per scan (all pools)
+  max_pages_per_wallet: 3        # 100 positions per page
+  refetch_hours: 6               # re-query a (wallet, pool) at most this often (closed ones get priority)
+  fetch_events: true             # /positions/{address}/historical for positions closed in our data window
+  max_event_fetches_per_scan: 60
+  shape_for_new_positions: true  # decode liquidity shares of positions opened while we watch (1 getMultipleAccounts / 100)
+  smart:                         # lp_wallets.status_smart (only closed positions count)
+    min_closed_positions: 10
+    min_win_rate: 0.6
+    min_avg_pnl_pct: 1
+  realism:                       # simulator realism check (dlmm lp realism)
+    max_single_add_gap_seconds: 60   # "simple" positions: one add, removes only within this of the close
+    min_duration_minutes: 5
+    max_checks: 500
+
 rug_detection:                   # auto blocklist (phase 10)
   enabled: true
   price_drop_pct: 50             # price falls >= 50% within the window ...
@@ -299,6 +336,7 @@ scoring:
     min_flow_samples: 20         # ... and at least this many sampled swaps in the window
     min_price_minutes: 15        # realized vol / ER need this many 1-minute bars
     er_minutes: 30               # N for efficiency ratio and trend_z
+    smart_lp: true               # phase 11: smart LP presence feature (competition module); false = off
     markout_seconds: 60
     whale_swap_usd: 5000         # swaps at least this large count as whale flow
   edge:

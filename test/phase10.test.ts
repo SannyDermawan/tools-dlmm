@@ -90,11 +90,14 @@ describe("Jupiter token audit (addendum 3.1)", () => {
   it("collector writes one row per mint, errors for unknown mints, PVP counts", async () => {
     const db = newDb();
     const c = cfg();
+    const queries: string[] = [];
     const tokens = {
-      get: async (_p: string, q: { query: string }) =>
-        q.query.includes("MINT1")
+      get: async (_p: string, q: { query: string }) => {
+        queries.push(q.query);
+        return q.query.includes("MINT1")
           ? [{ id: "MINT1", symbol: "AAA", organicScore: 70, audit: {} }]
-          : [{ id: "MINT1", symbol: "AAA" }, { id: "RIVAL", symbol: "AAA", stats24h: { buyVolume: 50_000, sellVolume: 0 } }],
+          : q.query === "AAA" ? [{ id: "MINT1", symbol: "AAA" }, { id: "RIVAL", symbol: "AAA", stats24h: { buyVolume: 50_000, sellVolume: 0 } }] : [];
+      },
     };
     const datapi = { get: async () => [{ id: "MINT1", audit: { botHoldersPercentage: 9 } }] };
     const col = new TokenAuditCollector({
@@ -106,6 +109,7 @@ describe("Jupiter token audit (addendum 3.1)", () => {
       "SELECT token, organic_score, bot_holders_pct, pvp_rival_count, error, source FROM token_audit ORDER BY token",
     );
     expect(rows[0]).toMatchObject({ token: "MINT1", organic_score: 70, bot_holders_pct: 9, pvp_rival_count: 1, error: null, source: "tokens_v2+datapi" });
+    expect(queries).toEqual(["MINT1,MINT2", "AAA"]); // mints batched, symbols one by one
     expect(rows[1].token).toBe("MINT2");
     expect(rows[1].error).toMatch(/not found/);
     // readers skip error rows and stale rows
@@ -358,5 +362,31 @@ describe("decision log and Meridian inputs", () => {
     expect(x).toMatchObject({ organic: 66, botHoldersPct: 7, holders: 5000, top10Pct: 20 });
     const y = presetInputsOf(tr, meta("P"), MIN, 5, 5, 1, new Set(["USD"]), () => null);
     expect(y).toMatchObject({ organic: null, botHoldersPct: null });
+  });
+});
+
+describe("bin array initialization (addendum 3.5)", () => {
+  const run = (avoid: boolean, entryMode: string) => {
+    const c = cfg();
+    c.simulation.avoid_bin_array_init = avoid;
+    const sink = new MemorySink();
+    const sim = new PoolSimulator(meta("P"), c, sink, () => "p1");
+    sim.onMarket({ quoteUsd: 1, solUsd: 100, priorityMicroLamports: 10_000 });
+    const snap = snapshot(0, 1000, "P");
+    snap.missingBinArrays = [Math.floor(1003 / 70)]; // the array holding bins 980..1049
+    sim.onState(state(0, 1000, "P"));
+    sim.onBins(snap);
+    sim.request({ strategy: "spot", sides: "two_sided", binsBelow: 3, binsAbove: 3, capitalUsd: 1000, entryMode, combo: {} }, 0);
+    sim.onState(state(10_000, 1000, "P"));
+    return sim.list()[0];
+  };
+  it("charges the init cost by default (feature requires_bin_array_init comes from the same snapshot)", () => {
+    const p = run(false, "signal_enter");
+    expect(p.status).toBe("active");
+    expect(p.costs.some((x) => x.type === "bin_array_init" && !x.refundable)).toBe(true);
+  });
+  it("avoid_bin_array_init: signal modes skip the range, the baseline still opens and pays", () => {
+    expect(run(true, "signal_enter")).toMatchObject({ status: "failed", failReason: "bin_array_init_avoided" });
+    expect(run(true, "all_pools_baseline").status).toBe("active");
   });
 });

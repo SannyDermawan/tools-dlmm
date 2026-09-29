@@ -88,7 +88,10 @@ const ScoringSchema = z
       })
       .strict(),
     features: z
-      .object({ min_swap_coverage: frac, min_flow_samples: z.number().int().min(1), min_price_minutes: pos, er_minutes: pos, markout_seconds: pos, whale_swap_usd: pos })
+      .object({
+        min_swap_coverage: frac, min_flow_samples: z.number().int().min(1), min_price_minutes: pos, er_minutes: pos, markout_seconds: pos, whale_swap_usd: pos,
+        smart_lp: z.boolean().default(true), // phase 11: smart LP presence feature (competition module)
+      })
       .strict(),
     edge: z
       .object({
@@ -384,6 +387,47 @@ export const ConfigSchema = z
           })
           .strict(),
         min_positions_for_features: z.number().int().min(1),
+      })
+      .strict(),
+    telegram: z
+      .object({
+        enabled: z.boolean(),
+        in_session: z.boolean(),
+        min_signal_score: pct,
+        min_confidence: frac,
+        signal_actions: z.array(z.string()).min(1),
+        daily_briefing_time_wib: z.string().regex(/^\d{2}:\d{2}$/),
+        poll_seconds: pos,
+        batch_seconds: pos,
+        min_interval_seconds: nonneg,
+        max_messages_per_hour: z.number().int().min(1),
+        alerts: z
+          .object({
+            gap_minutes: pos,
+            quota_pct: pct,
+            ws_down_minutes: pos,
+            heartbeat_stale_minutes: pos,
+            repeat_minutes: pos,
+          })
+          .strict(),
+      })
+      .strict(),
+    real_lp: z
+      .object({
+        enabled: z.boolean(),
+        scan_minutes: pos,
+        max_wallet_queries_per_scan: z.number().int().min(0),
+        max_pages_per_wallet: z.number().int().min(1),
+        refetch_hours: nonneg,
+        fetch_events: z.boolean(),
+        max_event_fetches_per_scan: z.number().int().min(0),
+        shape_for_new_positions: z.boolean(),
+        smart: z
+          .object({ min_closed_positions: z.number().int().min(1), min_win_rate: frac, min_avg_pnl_pct: z.number() })
+          .strict(),
+        realism: z
+          .object({ max_single_add_gap_seconds: nonneg, min_duration_minutes: nonneg, max_checks: z.number().int().min(1) })
+          .strict(),
       })
       .strict(),
     rug_detection: z

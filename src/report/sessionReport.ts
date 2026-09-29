@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { Db } from "../db/index.ts";
 import { getSession } from "../db/repo.ts";
+import { realismMarkdown } from "../analysis/realism.ts";
 import { calibrationMarkdown, groupComparison, groupComparisonMarkdown, reconciliationMarkdown, safetyMemoryMarkdown, scoreCalibration, signalVsBaseline, signalVsBaselineMarkdown } from "./analytics.ts";
 import { markdownToHtml } from "./html.ts";
 
@@ -172,6 +173,10 @@ export function writeSessionReport(db: Db, simSessionId: string, outDir = "repor
   md.push("## Safety filters, blocklist and pool memory (addendum 3)");
   md.push("");
   md.push(safetyMemoryMarkdown(db, simSessionId, dataSession, ds.start_at, ds.end_at ?? Date.now()));
+  md.push("");
+  md.push("## Real LP positions and simulator realism (addendum 4)");
+  md.push("");
+  md.push(realismMarkdown(db, dataSession));
   md.push("");
   md.push("## Score calibration");
   md.push("");

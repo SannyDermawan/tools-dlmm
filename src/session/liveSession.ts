@@ -129,6 +129,22 @@ export async function runLiveSession(app: AppContext, o: LiveSessionOptions = {}
     );
   };
 
+  // Telegram notifier + commands in the same process (phase 12); failures never touch the session
+  const tgAbort = new AbortController();
+  let tgRun: Promise<void> | null = null;
+  const tgc = cfg.telegram;
+  const token = process.env.TELEGRAM_BOT_TOKEN?.trim();
+  if (tgc.enabled && tgc.in_session && token) {
+    try {
+      const { TelegramApi } = await import("../notify/telegramApi.ts");
+      const { TelegramService, accessFromEnv } = await import("../notify/service.ts");
+      const svc = new TelegramService(app.db, tgc, new TelegramApi(token), accessFromEnv(), log.child({ component: "telegram" }), cfg.rpc.quota.warn_at_pct);
+      tgRun = svc.run(tgAbort.signal).catch((e) => log.warn({ err: (e as Error).message }, "telegram stopped"));
+    } catch (e) {
+      log.warn({ err: (e as Error).message }, "telegram not started");
+    }
+  }
+
   const res = await runCollection(app, {
     kind: "session",
     quiet: o.quiet,
@@ -183,6 +199,12 @@ export async function runLiveSession(app: AppContext, o: LiveSessionOptions = {}
     } catch (e) {
       log.error({ err: (e as Error).message }, "report failed");
     }
+  }
+  if (tgRun) {
+    // give the watcher one round to announce the end of the session, then stop it
+    await new Promise((r) => setTimeout(r, (tgc.poll_seconds + 2) * 1000));
+    tgAbort.abort();
+    await tgRun;
   }
   return { sessionId: res.sessionId, status: res.status, positions, report, grid: runner ? (runner as GridRunner).stats : null };
 }

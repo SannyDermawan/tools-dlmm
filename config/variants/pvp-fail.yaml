@@ -1,0 +1,8 @@
+# PVP rival handling variant (addendum 3.3): replay the same data with
+#   npm run dlmm -- -c config/variants/pvp-fail.yaml sim replay -s <session>
+# and compare with the default (penalty) run in `dlmm analyze`.
+extends: default
+config_label: pvp-fail
+scoring:
+  safety_gate:
+    pvp: { mode: fail, penalty: 15 }

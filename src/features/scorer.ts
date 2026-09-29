@@ -50,7 +50,7 @@ const SPEC = new Map(FEATURE_SPECS.map((f) => [f.name, f]));
 /** Blueprint features without a data source yet (P1/P2); not counted against confidence. */
 const NO_SOURCE_YET = new Set<string>();
 /** Phase 10 features that are optional sources (Jupiter audit, pool memory): never lower confidence. */
-const OPTIONAL_FEATURES = new Set(["organic_score", "bot_holders_pct", "pvp_rival_count", "token_age_hours", "pool_hist_net_pct", "pool_hist_win_rate", "requires_bin_array_init"]);
+const OPTIONAL_FEATURES = new Set(["smart_lp_present", "smart_lp_count", "organic_score", "bot_holders_pct", "pvp_rival_count", "token_age_hours", "pool_hist_net_pct", "pool_hist_win_rate", "requires_bin_array_init"]);
 /** Flow features (blueprint 8.2 core + P1 extensions). */
 export const FLOW_FEATURES = ["trader_diversity", "top5_wallet_share", "markout_60s", "buy_sell_balance", "markout_30s", "markout_300s", "wash_share", "whale_share"];
 const val = (f: RawFeatures, k: string) => f.get(k)?.raw ?? null;
@@ -133,6 +133,8 @@ export interface ScorerDeps {
   audit?: (token: string, t: number) => AuditRow | null;
   blocklist?: BlocklistLookup;
   memory?: MemoryView;
+  /** phase 11 (optional): smart LP presence */
+  smartLp?: { at(pool: string, t: number): { count: number; openPositions: number } | null };
 }
 
 /**
@@ -174,7 +176,7 @@ export class Scorer {
       if (blockedPools.has(pool)) continue;
       raw.set(pool, computeFeatures(tr, {
         config: c, t, eco: this.eco, security: this.d.security, macroEvents: this.d.macroEvents, riskTokens: this.riskTokens(tr.meta),
-        extra: this.d.extra, audit: this.d.audit, memory: this.d.memory,
+        extra: this.d.extra, audit: this.d.audit, memory: this.d.memory, smartLp: this.d.smartLp,
       }));
     }
     const norm = this.normalizer.normalize(raw);
@@ -215,7 +217,7 @@ export class Scorer {
         modules.regime = s;
       }
       modules.flow = mean(FLOW_FEATURES.map((k) => n.get(k)), 2);
-      modules.competition = mean(["lp_crowding", "bot_rebalance_freq", "pool_volume_share"].map((k) => n.get(k)), 1);
+      modules.competition = mean(["lp_crowding", "bot_rebalance_freq", "pool_volume_share", "smart_lp_present"].map((k) => n.get(k)), 1);
       // attention proxies (P1-P2): only weighted when scoring.modules.attention is on
       modules.attention = mean(["trending_score", "boosts_active", "social_presence", "launchpad_heat"].map((k) => n.get(k)), 2);
       const secRows = this.riskTokens(m).map((tk) => this.d.security(tk, t));

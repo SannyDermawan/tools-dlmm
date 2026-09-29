@@ -66,6 +66,9 @@ const TAINT_SOURCES = new Set(["pool_state", "bin_snapshot", "pool_metrics"]);
  * Demo DLMM simulator for ONE pool. All virtual positions of the pool share its data stream
  * (cost scales with pools, not positions). Feed it market events in timestamp order.
  */
+/** Entry modes that honour simulation.avoid_bin_array_init (baseline always pays, as a control). */
+const AVOID_INIT_MODES = new Set(["signal_enter", "signal_watch"]);
+
 export class PoolSimulator {
   private state: PoolStateUpdate | null = null;
   private snap: BinSnapshot | null = null;
@@ -232,6 +235,11 @@ export class PoolSimulator {
     p.entryActiveId = st.activeId;
     p.entryPriceUi = priceUi;
     p.entryQuoteUsd = quoteUsd;
+    // addendum 3.5: optionally skip signal-mode ranges that would pay a (non-refundable) bin array init
+    if (this.sim.avoid_bin_array_init && AVOID_INIT_MODES.has(p.spec.entryMode) &&
+        this.costs.binArrayInit(p.lower, p.upper, this.snap?.missingBinArrays ?? [], this.costCtx())) {
+      return this.fail(p, "bin_array_init_avoided", ts);
+    }
     p.openedAt = ts;
     p.accrualFrom = ts;
     p.lastMarkTs = ts;

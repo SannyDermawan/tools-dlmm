@@ -8,6 +8,7 @@ import { Scorer, securityLookup, type ScoreResult } from "./scorer.ts";
 import { extraLookup } from "./extraLookup.ts";
 import type { MemoryView } from "./compute.ts";
 import { auditLookup, blocklistLookup, type BlocklistLookup } from "./safetyData.ts";
+import { SmartLpLookup } from "./smartLp.ts";
 
 /** Hour-of-day volume vs the pool's mean, from completed 1h candles before t (look-ahead safe). */
 export function hourlyVolumeRatioFn(db: Db, minDays: number) {
@@ -75,6 +76,7 @@ export class ScoringRunner {
       audit: c.collectors.token_audit.enabled ? auditLookup(db, (c.scoring.max_age_seconds.audit ?? 2700) * 1000) : undefined,
       blocklist: this.blocklist,
       memory,
+      smartLp: c.real_lp.enabled && c.scoring.features.smart_lp ? new SmartLpLookup(db, c.real_lp.smart, metas.map((m) => m.pool)) : undefined,
     });
     if (swapPools) for (const [pool, tr] of this.scorer.trackers) tr.swapsCollected = swapPools.has(pool);
     const iv = c.scoring.interval_seconds * 1000;

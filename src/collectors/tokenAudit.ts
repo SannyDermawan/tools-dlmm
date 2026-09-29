@@ -159,18 +159,22 @@ export class TokenAuditCollector {
       }
     }
     const byId = new Map((main ?? []).map((t) => [t.id, t]));
-    // PVP: one symbol search per batch (comma-separated symbols)
+    // PVP: one search per symbol. The search takes comma-separated *mints* only; a comma-separated
+    // list of symbols returns nothing (verified 2026-09-29), so symbols are searched one by one.
     const pvp = d.config.collectors.token_audit.pvp;
     let rivalsPool: any[] = [];
+    let pvpOk = false;
     if (pvp.enabled && !err) {
-      const symbols = [...new Set(batch.map((m) => byId.get(m)?.symbol).filter((s): s is string => !!s && !/[,]/.test(s)))];
-      for (let i = 0; i < symbols.length; i += 20) {
+      const symbols = [...new Set(batch.map((m) => byId.get(m)?.symbol).filter((s): s is string => !!s))];
+      pvpOk = true;
+      for (const sym of symbols) {
         try {
-          const r = await this.tokens.get<any[]>("/search", { query: symbols.slice(i, i + 20).join(",") }, "/tokens/v2/search");
+          const r = await this.tokens.get<any[]>("/search", { query: sym }, "/tokens/v2/search");
           rivalsPool.push(...(r ?? []));
         } catch (e) {
-          d.log.warn({ err: (e as Error).message }, "jupiter symbol search failed (pvp unavailable this round)");
+          d.log.warn({ err: (e as Error).message, symbol: sym }, "jupiter symbol search failed (pvp unavailable this round)");
           rivalsPool = [];
+          pvpOk = false;
           break;
         }
       }
@@ -181,7 +185,7 @@ export class TokenAuditCollector {
       if (!j) row.error = err ?? "token not found in Jupiter search";
       else {
         Object.assign(row, parseJupiterToken(j, extras.get(mint)));
-        if (pvp.enabled && rivalsPool.length) {
+        if (pvpOk) {
           const riv = pvpRivals({ mint, symbol: j.symbol ?? null, name: j.name ?? null }, rivalsPool, pvp.min_rival_volume_24h_usd);
           row.pvp_rival_count = riv.length;
           row.pvp_rivals = JSON.stringify(riv.slice(0, 10));
