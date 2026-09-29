@@ -1,4 +1,10 @@
 import type { ExitPolicy } from "../config/schema.ts";
+import type { FlowThresholds, FlowTrigger } from "./flow.ts";
+
+/** Flow exit of a policy (triggers + thresholds + confirmation), see flow.ts. */
+export type FlowExit = FlowThresholds & { triggers: FlowTrigger[]; confirm_seconds: number };
+/** Friday's four triggers (the "all" set); net_buy_rel is our relative variant. */
+export const FRIDAY_FOUR: FlowTrigger[] = ["bundler", "net_buy", "holders", "volume"];
 
 /** An exit policy with every list parameter resolved to one value (one grid level). */
 export type ScalarExitPolicy =
@@ -20,7 +26,10 @@ export type ScalarExitPolicy =
       tolerance_pct: number;
       oor_minutes?: number;
     }
-  | { type: "low_yield_exit"; min_fee_pct_per_hour: number; window_minutes: number; min_age_minutes: number };
+  | { type: "low_yield_exit"; min_fee_pct_per_hour: number; window_minutes: number; min_age_minutes: number }
+  | { type: "time_stop"; minutes: number }
+  | { type: "scalp"; time_stop_minutes: number; oor_minutes: number; sl_pct?: number; flow?: FlowExit }
+  | ({ type: "flow_trigger"; set: string; time_stop_minutes?: number } & FlowExit);
 
 const list = (v: number | number[]) => (Array.isArray(v) ? v : [v]);
 
@@ -38,6 +47,17 @@ export function expandExitPolicies(policies: ExitPolicy[]): ScalarExitPolicy[] {
       case "stop_loss":
         for (const pct of list(p.pct)) out.push({ type: "stop_loss", pct });
         break;
+      case "exit_out_of_range":
+        for (const minutes of list(p.minutes)) out.push({ type: "exit_out_of_range", minutes });
+        break;
+      case "time_stop":
+        for (const minutes of list(p.minutes)) out.push({ type: "time_stop", minutes });
+        break;
+      case "flow_trigger": {
+        const { sets, type: _t, ...rest } = p;
+        for (const set of sets) out.push({ type: "flow_trigger", set, triggers: set === "all" ? FRIDAY_FOUR : [set], ...rest });
+        break;
+      }
       case "trailing_tp": {
         const t = list(p.trigger_pct);
         const d = list(p.drop_pct);
@@ -76,6 +96,12 @@ export function exitPolicyLabel(e: ScalarExitPolicy): string {
       return `tp_sl_combo:tp${e.tp_pct ?? "-"}${e.tp_fee_pct ? `/fee${e.tp_fee_pct}` : ""}:sl${e.sl_pct}:tr${e.trigger_pct ?? "-"}/${e.drop_pct ?? "-"}${e.oor_minutes ? `:oor${e.oor_minutes}m` : ""}`;
     case "low_yield_exit":
       return `low_yield_exit:${e.min_fee_pct_per_hour}%/h:${e.window_minutes}m`;
+    case "time_stop":
+      return `time_stop:${e.minutes}m`;
+    case "scalp":
+      return `scalp:ts${e.time_stop_minutes}m:oor${e.oor_minutes}m${e.sl_pct ? `:sl${e.sl_pct}` : ""}${e.flow ? `:flow${e.flow.triggers.length === 4 ? "4" : `(${e.flow.triggers.join("+")})`}` : ""}`;
+    case "flow_trigger":
+      return `flow:${e.set}${e.confirm_seconds ? `:c${e.confirm_seconds}s` : ""}${e.time_stop_minutes ? `:ts${e.time_stop_minutes}m` : ""}`;
   }
 }
 
@@ -89,6 +115,8 @@ export function oorRule(e: ScalarExitPolicy): { minutes: number; rebalance: bool
       return { minutes: e.minutes, rebalance: true, maxRebalances: e.max_rebalances };
     case "tp_sl_combo":
       return e.oor_minutes ? { minutes: e.oor_minutes, rebalance: false, maxRebalances: 0 } : null;
+    case "scalp":
+      return { minutes: e.oor_minutes, rebalance: false, maxRebalances: 0 };
     default:
       return null;
   }
@@ -194,6 +222,13 @@ export function pnlDecision(
       }
       return { reason: null, trailing };
     }
+    case "time_stop":
+      return { reason: x.ageMinutes >= e.minutes ? "time_stop" : null, trailing };
+    case "scalp":
+      if (e.sl_pct !== undefined && x.netPct <= -e.sl_pct) return { reason: "stop_loss", trailing };
+      return { reason: x.ageMinutes >= e.time_stop_minutes ? "time_stop" : null, trailing };
+    case "flow_trigger": // the flow part is evaluated by the grid runner (needs the flow snapshot)
+      return { reason: e.time_stop_minutes !== undefined && x.ageMinutes >= e.time_stop_minutes ? "time_stop" : null, trailing };
     case "low_yield_exit":
       return {
         reason: x.ageMinutes >= e.min_age_minutes && x.feePctPerHourWindow !== null && x.feePctPerHourWindow < e.min_fee_pct_per_hour ? "low_yield" : null,
@@ -204,4 +239,9 @@ export function pnlDecision(
   }
 }
 
-export const isPnlPolicy = (e: ScalarExitPolicy) => ["take_profit", "stop_loss", "trailing_tp", "tp_sl_combo", "low_yield_exit"].includes(e.type);
+export const isPnlPolicy = (e: ScalarExitPolicy) =>
+  ["take_profit", "stop_loss", "trailing_tp", "tp_sl_combo", "low_yield_exit", "time_stop", "scalp", "flow_trigger"].includes(e.type);
+
+/** Flow exit of a policy, if any. */
+export const flowExitOf = (e: ScalarExitPolicy): FlowExit | null =>
+  e.type === "flow_trigger" ? e : e.type === "scalp" ? e.flow ?? null : null;

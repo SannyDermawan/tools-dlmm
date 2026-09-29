@@ -224,9 +224,9 @@ export class TokenSecurityCollector {
     return row;
   }
 
-  async tick() {
+  async tick(mints?: string[]) {
     const { d } = this;
-    for (const mint of this.tokens()) {
+    for (const mint of mints ?? this.tokens()) {
       const row = await this.checkToken(mint);
       d.db.insert("token_security", row, "OR REPLACE");
       if (row.mint_auth_active != null && (row.top10_pct != null || new Set(d.config.categories.bluechip_tokens).has(mint))) d.gaps.ok(TokenSecurityCollector.SOURCE, mint);

@@ -5,6 +5,7 @@ import { binRawPrice } from "../math/bin.ts";
 import { CostModel, type CostContext, type CostItem } from "./costs.ts";
 import { binCount, deltaRange, distributeFull, xValueFraction, type RangeSpec } from "./distribution.ts";
 import { accumulatorFee, allocateSwapAcrossBins, dilutedShare } from "./feeAttribution.ts";
+import { gapTaint, taintSource } from "./taint.ts";
 import { valuePosition, VirtualPosition, type PositionSpec, type Valuation } from "./position.ts";
 
 export interface SimEvent {
@@ -63,7 +64,7 @@ export interface MarketContext {
 }
 
 /** Sources whose gaps make a position's result unreliable for calibration. */
-const TAINT_SOURCES = new Set(["pool_state", "bin_snapshot", "pool_metrics"]);
+
 
 /**
  * Demo DLMM simulator for ONE pool. All virtual positions of the pool share its data stream
@@ -95,6 +96,19 @@ export class PoolSimulator {
   /** true when every input needed to open a position is present */
   get ready(): boolean {
     return !!(this.state && this.snap && this.market.quoteUsd && this.market.solUsd);
+  }
+
+  /** pool_state (price) gaps of this pool, for deferring actions while the price is stale */
+  private priceGaps = new Map<number, number | null>(); // start -> end (null: open)
+
+  /**
+   * true while the pool's price data is in a gap at time t (simulation.gap_taint.defer_actions):
+   * the grid runner and the exit engine then wait for the first fresh update, as a real bot must.
+   */
+  priceStale(t: number): boolean {
+    if (!this.sim.gap_taint.defer_actions) return false;
+    for (const [start, end] of this.priceGaps) if (t >= start && (end === null || t < end)) return true;
+    return false;
   }
 
   get now(): number {
@@ -186,18 +200,40 @@ export class PoolSimulator {
   }
 
   onGap(g: { source: string; start: number; end: number | null }) {
-    if (!TAINT_SOURCES.has(g.source) && !(g.source === "swap_stream" && this.sim.fee_attribution === "swap_events")) return;
+    if (g.source === "pool_state") {
+      this.priceGaps.set(g.start, g.end);
+      if (this.priceGaps.size > 200) this.priceGaps.delete(this.priceGaps.keys().next().value!); // oldest
+    }
+    if (!taintSource(g.source, this.sim.fee_attribution)) return;
     const end = g.end ?? Number.MAX_SAFE_INTEGER;
     for (const p of this.positions.values()) {
       if (p.status !== "active" && p.status !== "closed") continue;
       const from = p.openedAt ?? p.requestedAt;
       const to = p.closedAt ?? Number.MAX_SAFE_INTEGER;
-      if (g.start <= to && end >= from && !p.gapTainted) {
-        p.gapTainted = true;
-        this.sink.event({ positionId: p.id, ts: Math.max(g.start, from), type: "gap", detail: g });
-        this.sink.positionUpdated(p);
-      }
+      if (g.start > to || end < from) continue;
+      const key = `${g.source}|${g.start}`;
+      if (!p.gapIntervals.has(key)) this.sink.event({ positionId: p.id, ts: Math.max(g.start, from), type: "gap", detail: g });
+      p.gapIntervals.set(key, { source: g.source, start: g.start, end: g.end });
+      this.retaint(p, this.now);
     }
+  }
+
+  /** Re-evaluate the gap taint of a position (proportional rule, see taint.ts). */
+  private retaint(p: VirtualPosition, now: number) {
+    if (!p.gapIntervals.size) return;
+    const from = p.openedAt ?? p.requestedAt;
+    const to = p.closedAt ?? Math.max(now, from);
+    p.taint = gapTaint(p.gapIntervals.values(), p.actionTimes, from, to, this.sim.gap_taint);
+    if (p.taint.tainted !== p.gapTainted) {
+      p.gapTainted = p.taint.tainted;
+      this.sink.positionUpdated(p);
+    }
+  }
+
+  /** Record an action time (open / rebalance / partial / compound / close) for the gap taint. */
+  private acted(p: VirtualPosition, ts: number) {
+    p.actionTimes.push(ts);
+    this.retaint(p, ts);
   }
 
   // ------------------------------------------------------------------ orders
@@ -261,6 +297,7 @@ export class PoolSimulator {
       return this.fail(p, "bin_array_init_avoided", ts);
     }
     p.openedAt = ts;
+    p.actionTimes.push(ts);
     p.accrualFrom = ts;
     p.lastMarkTs = ts;
     p.lastFeeEventTs = ts;
@@ -385,6 +422,7 @@ export class PoolSimulator {
     p.accrualFrom = ts;
     p.inRange = true;
     p.outOfRangeSince = null;
+    this.acted(p, ts);
     this.sink.event({
       positionId: p.id, ts, type: "rebalance",
       detail: {
@@ -421,6 +459,7 @@ export class PoolSimulator {
       if (xUsd > 0) items.push(this.costs.swapCost(xUsd, this.swapRate(st.feeRateTotal), "exit_swap"));
     }
     p.costs.push(...items);
+    this.acted(p, ts);
     this.sink.event({
       positionId: p.id, ts, type: "partial_exit",
       detail: { reason, fraction, withdrawnQuote, price: st.priceUi, costs: items.map((x) => ({ type: x.type, usd: x.usd })) },
@@ -485,6 +524,7 @@ export class PoolSimulator {
     const items: CostItem[] = [this.costs.txCost("claim", ctx, bins), this.costs.txCost("add", ctx, bins)];
     if (notional > 0.01) items.push(this.costs.txCost("swap", ctx), this.costs.swapCost(notional, this.swapRate(st.feeRateTotal)));
     p.costs.push(...items);
+    this.acted(p, ts);
     this.sink.event({
       positionId: p.id, ts, type: "compound",
       detail: { feeUsd: v.feeUsd, n: p.compounds, liquidUsd, swapNotionalUsd: notional, costs: items.map((c) => ({ type: c.type, usd: c.usd })) },
@@ -574,6 +614,7 @@ export class PoolSimulator {
     p.status = "closed";
     p.closedAt = ts;
     p.closeReason = reason;
+    this.acted(p, ts);
     const cap = p.spec.capitalUsd;
     const dur = (ts - (p.openedAt ?? ts)) / 60000;
     const quoteUsd = this.market.quoteUsd ?? p.entryQuoteUsd;
@@ -613,6 +654,9 @@ export class PoolSimulator {
         feeAttribution: this.sim.fee_attribution,
         costs: p.costs.map((c) => ({ type: c.type, usd: c.usd, refundable: c.refundable })),
         gapTainted: p.gapTainted,
+        gapMinutes: p.taint ? p.taint.gapMs / 60_000 : 0,
+        gapFraction: p.taint?.fraction ?? 0,
+        taintReason: p.taint?.reason ?? null,
       },
     };
     this.sink.event({ positionId: p.id, ts, type: "exit", detail: { reason, netPnlUsd: v.netPnlUsd, feeUsd: v.feeUsd, ilUsd: v.ilUsd, price: st.priceUi } });

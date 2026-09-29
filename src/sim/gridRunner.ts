@@ -2,8 +2,10 @@ import type { Config } from "../config/schema.ts";
 import type { Logger } from "../util/logger.ts";
 import type { PoolSimulator } from "./engine.ts";
 import type { PositionSpec, VirtualPosition } from "./position.ts";
+import { baseFeePct, evaluateFriday, FRIDAY_NOT_YET, fridayExitPolicy, loadFridayPreset, type FridayInputs, type FridayPreset } from "./friday.ts";
 import { evaluateMeridian, feeWindowMinutes, loadMeridianPreset, meridianExitPolicy, type MeridianPreset, type PresetEvaluation, type PresetInputs } from "./meridian.ts";
-import { expandExitPolicies, exitPolicyLabel, isPnlPolicy, newTrailing, oorRule, pnlDecision, type TrailingState } from "./policies.ts";
+import { FRIDAY_CONFIRM, flowConfirm, flowTriggers, netBuyUsd, type FlowSnapshot } from "./flow.ts";
+import { expandExitPolicies, exitPolicyLabel, flowExitOf, isPnlPolicy, newTrailing, oorRule, pnlDecision, type TrailingState } from "./policies.ts";
 import type { SignalBook } from "../signals/signalEngine.ts";
 import type { ExitEngine } from "../signals/exitEngine.ts";
 import { entryFilterPass, type EntryFilter, type TfSnapshot } from "../features/indicators.ts";
@@ -59,7 +61,9 @@ export class SessionClock {
 export { exitPolicyLabel };
 
 /** Entry modes that need the decision stack (signals / preset inputs) — skipped without it. */
-const SIGNAL_MODES = new Set(["signal_enter", "signal_watch", "meridian_preset"]);
+const SIGNAL_MODES = new Set(["signal_enter", "signal_watch", "meridian_preset", "friday_scalp"]);
+/** Entry modes that open their own fixed preset position instead of the grid combinations. */
+const PRESET_MODES = new Set(["meridian_preset", "friday_scalp"]);
 /** Entry modes that run with and without the pool cooldown (grid.cooldown_enabled). */
 const COOLDOWN_MODES = new Set(["signal_enter", "signal_watch"]);
 
@@ -127,7 +131,7 @@ export function gridCombos(c: Config, opts: { allowSignalModes?: boolean; sessio
   const dims = [g.strategies.length, g.bins_per_side.length, g.sides.length, policies.length, g.variants.length, filters.length];
   const sample = g.sampling.mode === "full" ? balancedSample(dims, Number.MAX_SAFE_INTEGER, 0) : balancedSample(dims, g.sampling.max_combos, g.sampling.seed);
   const wide = g.variant_params.wide_range;
-  const modes = g.entry_modes.filter((m) => m !== "meridian_preset" && (opts.allowSignalModes || !SIGNAL_MODES.has(m)));
+  const modes = g.entry_modes.filter((m) => !PRESET_MODES.has(m) && (opts.allowSignalModes || !SIGNAL_MODES.has(m)));
   // cooldowns (4-12 h) cannot trigger in a short session: run signal modes without the dimension
   const cooldownLevels = opts.sessionMinutes !== undefined && opts.sessionMinutes < g.cooldown_min_session_minutes ? [false] : g.cooldown_enabled;
   // the baseline may use only the first baseline_max_combos of the same sample (a subset, so
@@ -161,6 +165,17 @@ export function gridCombos(c: Config, opts: { allowSignalModes?: boolean; sessio
   return out;
 }
 
+/** Compact flow values for the journal (entry and exit decisions). */
+function flowDetail(x: FlowSnapshot) {
+  const r = (v: number | null | undefined) => (v === null || v === undefined ? null : Math.round(v * 100) / 100);
+  return {
+    volume: x.minutes.slice(0, 3).map((m) => r(m.volumeUsd)),
+    netBuy: r(netBuyUsd(x.minutes[0], x.riskIsX)),
+    holders: x.holders,
+    bundlerPct: x.bundlerPct ? { now: r(x.bundlerPct.now), prev: r(x.bundlerPct.prev) } : null,
+  };
+}
+
 export interface GridStats {
   cohorts: number;
   requested: number;
@@ -173,8 +188,12 @@ export interface GridStats {
   pnlExits: Record<string, number>;
   variantActions: { partial_harvest: number; fee_compounding: number; single_sided_reseed: number };
   preset: { evaluated: number; passed: number; opened: number; partial: number };
+  /** Friday playbook entries: pools screened, positions opened (first + re-entries), screen failures */
+  friday: { evaluated: number; opened: number; reentries: number; failed: Record<string, number> };
   /** signal-mode positions not opened because the pool was in cooldown (phase 10) */
   cooldownSkips: number;
+  /** pool entries that waited for fresh price data (cohort time fell into a data gap) */
+  deferredEntries: number;
   /** positions not opened because their indicator entry filter did not pass, by filter and reason (phase 13) */
   filterSkips: Record<string, number>;
   capped: boolean;
@@ -194,11 +213,19 @@ export interface GridSignals {
   indicators?: { at(pool: string, t: number): Record<string, TfSnapshot> | null };
   /** preset override (tests); default: loaded from config presets.meridian */
   preset?: MeridianPreset;
+  /** one-minute flow of a pool at t (flow exits, Friday entry confirmation) */
+  flow?: (pool: string, t: number) => FlowSnapshot | null;
+  /** Friday screen inputs of a pool at t (entry mode friday_scalp) */
+  fridayInputs?: (pool: string, t: number) => FridayInputs | null;
+  /** preset override (tests); default: loaded from config presets.friday */
+  friday?: FridayPreset;
 }
 
 /** Per-position runtime state of the PnL policies and variants. */
 interface PosRuntime {
   trailing: TrailingState;
+  /** first time a flow trigger fired (confirm_seconds > 0) */
+  flowPending: number | null;
   feeHist: { t: number; feeUsd: number }[];
   lastCompound: number;
 }
@@ -218,13 +245,18 @@ export class GridRunner {
   private nextCohortAt: number;
   private cohort = 0;
   private lastEval = 0;
+  /** pools whose cohort entry waits for fresh price data: pool -> cohort number */
+  private readonly deferred = new Map<string, number>();
   private readonly rt = new Map<string, PosRuntime>();
   readonly combos: PositionSpec[];
   readonly preset: MeridianPreset | null = null;
+  readonly friday: FridayPreset | null = null;
+  /** friday_scalp trades per pool (count, last close / open time) */
+  private readonly fridayTrades = new Map<string, { n: number; positionId: string }>();
   readonly stats: GridStats = {
     cohorts: 0, requested: 0, skippedPools: 0, rebalances: 0, policyExits: 0, rebalanceNotWorth: 0, signalEntries: {}, pnlExits: {},
     variantActions: { partial_harvest: 0, fee_compounding: 0, single_sided_reseed: 0 },
-    preset: { evaluated: 0, passed: 0, opened: 0, partial: 0 }, cooldownSkips: 0, filterSkips: {}, capped: false,
+    preset: { evaluated: 0, passed: 0, opened: 0, partial: 0 }, friday: { evaluated: 0, opened: 0, reentries: 0, failed: {} }, cooldownSkips: 0, filterSkips: {}, deferredEntries: 0, capped: false,
   };
 
   constructor(
@@ -244,6 +276,13 @@ export class GridRunner {
         log?.error({ err: (e as Error).message, path: c.presets.meridian }, "meridian preset not loaded; entry mode skipped");
       }
     }
+    if (signals && c.grid.entry_modes.includes("friday_scalp")) {
+      try {
+        this.friday = signals.friday ?? loadFridayPreset(c.presets.friday);
+      } catch (e) {
+        log?.error({ err: (e as Error).message, path: c.presets.friday }, "friday preset not loaded; entry mode skipped");
+      }
+    }
     this.nextCohortAt = clock.warmupEnd;
   }
 
@@ -256,8 +295,14 @@ export class GridRunner {
     if (ts - this.lastEval >= this.c.simulation.pnl_eval_seconds * 1000) {
       this.lastEval = ts;
       this.evaluate(ts);
+      // Friday playbook: a new scalp in a pool reentry.minutes after the previous one closed
+      if (this.friday && this.cohort > 0 && this.clock.phase(ts) === "active") this.openFriday(ts, this.cohort, true);
     }
+    this.openDeferred(ts);
     if (this.clock.phase(ts) !== "active" || ts < this.nextCohortAt) return;
+    // every pool's price data in a gap (network outage): open the cohort on the first fresh tick
+    const ready = [...this.sims.values()].filter((s) => s.ready);
+    if (ready.length && ready.every((s) => s.priceStale(ts))) return;
     this.openCohort(ts);
     const iv = this.clock.t.cohortIntervalMinutes;
     this.nextCohortAt = iv > 0 ? this.nextCohortAt + iv * 60_000 : Number.POSITIVE_INFINITY;
@@ -281,11 +326,57 @@ export class GridRunner {
     this.cohort++;
     this.stats.cohorts++;
     let opened = this.openPreset(ts);
+    opened += this.openFriday(ts, this.cohort, false);
     for (const sim of this.sims.values()) {
       if (!sim.ready) {
+        // no data yet (e.g. a pool added during the session): enter once its data is complete
         this.stats.skippedPools++;
+        this.deferred.set(sim.meta.pool, this.cohort);
         continue;
       }
+      if (sim.priceStale(ts)) {
+        // price data in a gap: enter on the first fresh update instead (as a real bot would)
+        this.deferred.set(sim.meta.pool, this.cohort);
+        this.stats.deferredEntries++;
+        continue;
+      }
+      if (this.openPool(sim, ts, this.cohort)) return;
+      opened += this.lastOpened;
+    }
+    this.log?.info({ cohort: this.cohort, opened, total: this.stats.requested }, "grid cohort opened");
+  }
+
+  private lastOpened = 0;
+
+  /** Entries of deferred pools once their price data is fresh again (active phase only). */
+  private openDeferred(ts: number) {
+    if (!this.deferred.size) return;
+    if (this.clock.phase(ts) !== "active") {
+      this.deferred.clear();
+      return;
+    }
+    for (const [pool, cohort] of this.deferred) {
+      const sim = this.sims.get(pool);
+      if (!sim || !sim.ready || sim.priceStale(ts)) continue;
+      this.deferred.delete(pool);
+      if (this.openPool(sim, ts, cohort)) return;
+      this.openFriday(ts, cohort, false, pool);
+    }
+  }
+
+  /**
+   * A pool joined during the session (fresh lane): its entries of the current cohort happen as
+   * soon as its data is complete instead of waiting for the next cohort.
+   */
+  onPoolAdded(pool: string) {
+    if (this.cohort > 0 && !this.deferred.has(pool)) this.deferred.set(pool, this.cohort);
+  }
+
+  /** Open the grid of one pool for a cohort. Returns true when grid.max_positions was reached. */
+  private openPool(sim: PoolSimulator, ts: number, cohortNo: number): boolean {
+    this.lastOpened = 0;
+    let opened = 0;
+    {
       const sig = this.signals?.book.latestFor(sim.meta.pool, ts) ?? null;
       const rec = sig?.recommendation ?? null;
       const cooldown = this.signals?.memory?.poolCooldown(sim.meta.pool, ts) ?? null;
@@ -302,7 +393,12 @@ export class GridRunner {
         if (ef !== "none") {
           let ok = filterOk.get(ef);
           if (ok === undefined) {
-            const r = entryFilterPass(ef as EntryFilter, ind, this.c.indicators);
+            // flow_confirm: Friday's entry confirmation (stage 2) on the grid combinations
+            const snap = ef === "flow_confirm" ? this.signals?.flow?.(sim.meta.pool, ts) ?? null : null;
+            const fc = ef === "flow_confirm" && snap ? flowConfirm(snap, FRIDAY_CONFIRM) : null;
+            const r = ef === "flow_confirm"
+              ? { pass: !!fc?.pass, reason: fc ? fc.failed[0] ?? "ok" : "no_data" }
+              : entryFilterPass(ef as EntryFilter, ind, this.c.indicators);
             ok = r.pass;
             filterOk.set(ef, ok);
             if (!ok) {
@@ -312,16 +408,19 @@ export class GridRunner {
           }
           if (!ok) continue;
         }
-        if (this.full()) return;
+        if (this.full()) {
+          this.lastOpened = opened;
+          return true;
+        }
         const matches = !!rec && rec.strategy === spec.strategy && rec.sides === spec.sides &&
           rec.bins_below === spec.binsBelow && rec.bins_above === spec.binsAbove;
         sim.request(
           {
             ...spec,
-            cohort: this.cohort,
+            cohort: cohortNo,
             signalId: sig?.signal_id ?? null,
             combo: {
-              ...spec.combo, cohort: this.cohort, signal_action: sig?.action ?? null, signal_score: sig?.final_score ?? null,
+              ...spec.combo, cohort: cohortNo, signal_action: sig?.action ?? null, signal_score: sig?.final_score ?? null,
               matches_recommendation: matches,
             },
           },
@@ -336,7 +435,8 @@ export class GridRunner {
       }
       if (taken && sig) this.signals!.book.markTaken(sig.signal_id);
     }
-    this.log?.info({ cohort: this.cohort, opened, total: this.stats.requested }, "grid cohort opened");
+    this.lastOpened = opened;
+    return false;
   }
 
   /**
@@ -350,7 +450,7 @@ export class GridRunner {
     const win = feeWindowMinutes(pr);
     const passing: { sim: PoolSimulator; ev: PresetEvaluation }[] = [];
     for (const sim of this.sims.values()) {
-      if (!sim.ready) continue;
+      if (!sim.ready || sim.priceStale(ts)) continue;
       const x = inputs(sim.meta.pool, ts, sim, win);
       if (!x) continue;
       this.stats.preset.evaluated++;
@@ -391,10 +491,82 @@ export class GridRunner {
     return opened;
   }
 
+  /**
+   * friday_scalp: one Spot two-sided position (34 + 1 + 34 bins) with the scalp exit (time stop 15
+   * min, out of range) in every pool passing Friday's screen. At a cohort every passing pool without
+   * an open scalp gets one; between cohorts (`reentry`) a pool gets the next one reentry.minutes
+   * after its previous scalp closed, up to max_trades_per_pool. Flow confirmation / flow exits are
+   * stage 2: positions are flagged preset_partial.
+   */
+  private openFriday(ts: number, cohortNo: number, reentry: boolean, only?: string): number {
+    const pr = this.friday;
+    const inputs = this.signals?.fridayInputs;
+    if (!pr || !inputs) return 0;
+    let opened = 0;
+    for (const sim of this.sims.values()) {
+      if (only && sim.meta.pool !== only) continue;
+      if (!sim.ready || sim.priceStale(ts)) continue;
+      const prev = this.fridayTrades.get(sim.meta.pool);
+      if (prev) {
+        const p = sim.get(prev.positionId);
+        if (p && (p.status === "active" || p.status === "pending")) continue; // one scalp at a time
+        if (prev.n >= pr.reentry.max_trades_per_pool) continue;
+        const since = p?.closedAt ?? p?.requestedAt ?? 0;
+        if (reentry && ts - since < pr.reentry.minutes * 60_000) continue;
+      } else if (reentry && !pr.entry_confirm.enabled) continue; // without a confirmation: first entries at cohorts
+      const x = inputs(sim.meta.pool, ts);
+      if (!x) continue;
+      this.stats.friday.evaluated++;
+      const failed = evaluateFriday(pr, sim.meta, x, ts);
+      // step 2 "confirm entry": volume rising, net buy > 0, holders growing, bundlers stable
+      let confirm: ReturnType<typeof flowConfirm> | null = null;
+      let snap: FlowSnapshot | null = null;
+      if (!failed.length && pr.entry_confirm.enabled) {
+        snap = this.signals?.flow?.(sim.meta.pool, ts) ?? null;
+        confirm = snap ? flowConfirm(snap, pr.entry_confirm) : { pass: false, failed: ["flow:missing"], missing: [] };
+        for (const f of confirm.failed) failed.push(`confirm:${f}`);
+      }
+      if (failed.length) {
+        for (const f of failed) this.stats.friday.failed[f] = (this.stats.friday.failed[f] ?? 0) + 1;
+        continue;
+      }
+      if (this.full()) break;
+      const s = pr.strategy;
+      const exitPolicy = fridayExitPolicy(pr);
+      const sig = this.signals?.book.latestFor(sim.meta.pool, ts) ?? null;
+      const n = (prev?.n ?? 0) + 1;
+      const p = sim.request(
+        {
+          strategy: s.shape, sides: s.sides, exitPolicy, variant: "none", entryMode: "friday_scalp",
+          binsBelow: s.sides === "base_only" ? 0 : s.bins_per_side, binsAbove: s.sides === "quote_only" ? 0 : s.bins_per_side,
+          capitalUsd: this.c.simulation.virtual_capital_usd, cohort: cohortNo, signalId: sig?.signal_id ?? null,
+          combo: {
+            entry_mode: "friday_scalp", strategy: s.shape, bins_per_side: s.bins_per_side, sides: s.sides,
+            exit_policy: exitPolicyLabel(exitPolicy), variant: "none", cohort: cohortNo, trade_no: n, reentry: !!prev, at_cohort: !reentry,
+            preset_partial: FRIDAY_NOT_YET.length > 0 || (confirm?.missing.length ?? 0) > 0,
+            preset_missing: [...FRIDAY_NOT_YET, ...(confirm?.missing ?? [])],
+            flow_at_entry: snap ? flowDetail(snap) : null,
+            pool_age_minutes: sim.meta.createdAt ? (ts - sim.meta.createdAt) / 60_000 : null,
+            base_fee_pct: baseFeePct(sim.meta), collect_fee_mode: sim.meta.collectFeeMode,
+            signal_action: sig?.action ?? null, signal_score: sig?.final_score ?? null,
+          },
+        },
+        ts,
+      );
+      this.fridayTrades.set(sim.meta.pool, { n, positionId: p.id });
+      this.stats.requested++;
+      this.stats.friday.opened++;
+      if (reentry) this.stats.friday.reentries++;
+      this.stats.signalEntries.friday_scalp = (this.stats.signalEntries.friday_scalp ?? 0) + 1;
+      opened++;
+    }
+    return opened;
+  }
+
   /** Out-of-range exit policies for one pool after its state update. */
   onPoolState(pool: string, ts: number) {
     const sim = this.sims.get(pool);
-    if (!sim) return;
+    if (!sim || sim.priceStale(ts)) return;
     for (const p of sim.list()) {
       if (p.status !== "active" || p.outOfRangeSince === null || !p.spec.exitPolicy) continue;
       const pol = p.spec.exitPolicy;
@@ -437,7 +609,7 @@ export class GridRunner {
   private runtime(p: VirtualPosition): PosRuntime {
     let r = this.rt.get(p.id);
     if (!r) {
-      r = { trailing: newTrailing(), feeHist: [], lastCompound: p.openedAt ?? 0 };
+      r = { trailing: newTrailing(), flowPending: null, feeHist: [], lastCompound: p.openedAt ?? 0 };
       this.rt.set(p.id, r);
     }
     return r;
@@ -447,6 +619,7 @@ export class GridRunner {
   private evaluate(ts: number) {
     const vp = this.c.grid.variant_params;
     for (const sim of this.sims.values()) {
+      if (sim.priceStale(ts)) continue; // price data in a gap: act on the first fresh update
       for (const p of sim.list()) {
         if (p.status !== "active") {
           this.rt.delete(p.id);
@@ -488,11 +661,24 @@ export class GridRunner {
         const d = pnlDecision(pol, { t: ts, netPct, feePct: (feeTotal / cap) * 100, ageMinutes: (ts - p.openedAt) / 60_000, feePctPerHourWindow: feeRate }, r.trailing);
         r.trailing = d.trailing;
         if (d.event) sim.logExitSignal(p.id, ts, { action: d.event, pnlPct: netPct, peakPct: d.trailing.peak, policy: pol.type });
-        if (d.reason) {
-          sim.close(p.id, d.reason, ts);
+        let reason = d.reason;
+        // Friday stage 2: one-minute flow triggers (first check one minute after the open)
+        const fx = flowExitOf(pol);
+        if (!reason && fx && ts - p.openedAt >= 60_000 && this.signals?.flow) {
+          const snap = this.signals.flow(sim.meta.pool, ts);
+          const f = snap ? flowTriggers(snap, fx.triggers, fx) : null;
+          if (f && f.fired.length) {
+            if (fx.confirm_seconds <= 0 || (r.flowPending !== null && ts - r.flowPending >= fx.confirm_seconds * 1000)) {
+              reason = `flow_${f.fired[0]}`;
+              sim.logExitSignal(p.id, ts, { action: "KELUAR", reason, fired: f.fired, flow: flowDetail(snap!) });
+            } else if (r.flowPending === null) r.flowPending = ts;
+          } else r.flowPending = null;
+        }
+        if (reason) {
+          sim.close(p.id, reason, ts);
           this.rt.delete(p.id);
           this.stats.policyExits++;
-          this.stats.pnlExits[d.reason] = (this.stats.pnlExits[d.reason] ?? 0) + 1;
+          this.stats.pnlExits[reason] = (this.stats.pnlExits[reason] ?? 0) + 1;
         }
       }
     }

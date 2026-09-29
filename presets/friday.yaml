@@ -1,0 +1,43 @@
+# Friday's DLMM scalp playbook (manual trader, shared as images on 2026-09-29) as a community
+# baseline: entry mode `friday_scalp`. Numbers are his; each one is configurable here.
+# Stage 1: pool / safety filters, shape and the time / out-of-range exits.
+# Stage 2: the 1-minute flow confirmation at entry and the four one-trigger flow exits.
+# Pool volume / net buy per minute come from our bin snapshots; holders and bundler % from Jupiter
+# once a minute (bundlers: unofficial datapi). A position is preset_partial only when a flow input
+# was missing at entry.
+pool_filter:
+  bin_steps: [100]               # "bin step 100 ..."
+  base_fee_pct: [2]              # "... + base fee 2%"
+  max_age_minutes: 360           # "fresh memecoin pools"
+  min_tvl_usd: 1000              # "verify ... LP depth"
+safety:
+  fail_on_mint_authority: true   # "verify CA, authorities"
+  fail_on_freeze_authority: true
+  missing_security: skip         # skip | allow (fresh tokens often have no security row yet)
+strategy:
+  shape: spot                    # "deposit both sides with Spot shape"
+  sides: two_sided
+  bins_per_side: 34              # "about 69 bins" = 34 + active + 34
+exit:
+  time_stop_minutes: 15          # "time stop: close near 15 minutes"
+  oor_minutes: 0                 # "exit if price leaves the range"
+flow_exit:                       # "exit on ONE trigger ... act immediately, no second confirmation"
+  triggers: [bundler, net_buy, holders, volume]
+  bundler_drop_pp: 2             # bundler supply drops >= 2 points in 1 min
+  net_buy_usd: 5000              # net buy <= -$5,000 in 1 min (pool level)
+  net_buy_tvl_pct: 5             # (only used by the net_buy_rel trigger)
+  holders_drop_pct: 10           # holders drop >= 10% vs the previous minute
+  volume_drop_pct: 20            # volume drops >= 20% vs the previous minute
+  min_prev_volume_usd: 0
+  confirm_seconds: 0             # 0 = no second confirmation
+entry_confirm:                   # step 2 "confirm entry"
+  enabled: true
+  volume_rising_minutes: 2       # "volume rising for 2-3 candles"
+  require_net_buy_positive: true # "net buy positive on current 1m"
+  require_holders_growing: true  # "holder count growing"
+  bundler_max_rise_pp: 0.5       # "bundler supply stable or falling slowly"
+  bundler_max_fall_pp: 2
+  missing: skip                  # token data missing (e.g. datapi down): skip that check, flag partial
+reentry:
+  minutes: 5                     # a new scalp in the same pool this long after the last one closed
+  max_trades_per_pool: 6         # per session

@@ -367,6 +367,20 @@ export class SwapStreamCollector {
     d.gaps.ok(SwapStreamCollector.SOURCE, pool);
   }
 
+  /** Start streaming a pool added during the session (fresh lane). */
+  addPool(m: PoolMeta) {
+    const { d } = this;
+    if (d.pools.has(m.pool)) return;
+    d.pools.set(m.pool, m);
+    d.gaps.register(SwapStreamCollector.SOURCE, m.pool);
+    d.ws?.subscribe({
+      key: m.pool,
+      method: "logsSubscribe",
+      params: [{ mentions: [m.pool] }, { commitment: d.rpc.commitment === "processed" ? "confirmed" : d.rpc.commitment }],
+      notification: "logsNotification",
+    });
+  }
+
   async run(signal: AbortSignal): Promise<void> {
     const { d } = this;
     for (const p of d.pools.keys()) d.gaps.register(SwapStreamCollector.SOURCE, p);

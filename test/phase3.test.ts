@@ -83,7 +83,10 @@ describe("GridRunner", () => {
     c.grid.variants = ["none"];
     c.grid.sampling.mode = "full";
     // phase 3 policies only (the PnL policies of phase 9 are tested in phase9.test.ts)
-    c.grid.exit_policies = c.grid.exit_policies.filter((p) => ["hold_to_session_end", "exit_out_of_range", "rebalance_out_of_range", "exit_engine"].includes(p.type));
+    c.grid.exit_policies = c.grid.exit_policies
+      .filter((p) => ["hold_to_session_end", "exit_out_of_range", "rebalance_out_of_range", "exit_engine"].includes(p.type))
+      // the phase 3 level only (the default grid also has a 0-minute level since the Friday playbook)
+      .map((p) => (p.type === "exit_out_of_range" ? { ...p, minutes: 15 } : p));
     mut?.(c);
     const sink = new MemorySink();
     let n = 0;

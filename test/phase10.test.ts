@@ -63,7 +63,8 @@ describe("Jupiter token audit (addendum 3.1)", () => {
         audit: { topHoldersPercentage: 31.5, devBalancePercentage: 1.2, devMints: 3, isSus: true }, isVerified: false, tags: ["x"],
         stats24h: { buyVolume: 1000, sellVolume: 500 },
       },
-      { audit: { botHoldersPercentage: 12.5, botHoldersCount: 40, bundlerStats: { holdingPct: 0.05 } }, fees: 3.2 },
+      // holdingPct is already a percentage (live values up to 4.3), stored as is
+      { audit: { botHoldersPercentage: 12.5, botHoldersCount: 40, bundlerStats: { holdingPct: 5 } }, fees: 3.2 },
     );
     expect(r).toMatchObject({
       organic_score: 42.5, holder_count: 1234, launchpad: "pump.fun", dev: "DEV", top_holders_pct: 31.5, bot_holders_pct: 12.5,

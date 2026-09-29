@@ -18,15 +18,29 @@ const collector = <T extends z.ZodRawShape>(shape: T) =>
 export const STRATEGIES = ["spot", "curve", "bidask"] as const;
 export const SIDES = ["two_sided", "base_only", "quote_only"] as const;
 export const CATEGORIES = ["memecoin", "bluechip"] as const;
-export const ENTRY_MODES = ["all_pools_baseline", "meridian_preset", "signal_enter", "signal_watch"] as const;
+export const ENTRY_MODES = ["all_pools_baseline", "meridian_preset", "friday_scalp", "signal_enter", "signal_watch"] as const;
 export const OHLCV_TIMEFRAMES = ["5m", "30m", "1h", "2h", "4h", "12h", "24h"] as const;
 
 const numOrList = z.union([z.number().positive(), z.array(z.number().positive()).min(1)]);
+const nonnegOrList = z.union([z.number().min(0), z.array(z.number().min(0)).min(1)]);
 export const VARIANTS = ["none", "partial_harvest", "fee_compounding", "single_sided_reseed", "wide_range"] as const;
+
+// Friday playbook, stage 2: one-minute flow triggers (defaults = Friday's numbers)
+const FLOW_TRIGGER_NAMES = ["bundler", "net_buy", "net_buy_rel", "holders", "volume", "volume_avg3"] as const;
+const flowThresholds = {
+  bundler_drop_pp: nonneg.default(2),
+  net_buy_usd: nonneg.default(5000),
+  net_buy_tvl_pct: nonneg.default(5),
+  holders_drop_pct: nonneg.default(10),
+  volume_drop_pct: nonneg.default(20),
+  min_prev_volume_usd: nonneg.default(0),
+  confirm_seconds: nonneg.default(0),
+};
 
 const exitPolicy = z.discriminatedUnion("type", [
   z.object({ type: z.literal("hold_to_session_end") }).strict(),
-  z.object({ type: z.literal("exit_out_of_range"), minutes: pos }).strict(),
+  // minutes 0 = exit on the first update out of range (Friday playbook); a list gives several levels
+  z.object({ type: z.literal("exit_out_of_range"), minutes: nonnegOrList }).strict(),
   z
     .object({
       type: z.literal("rebalance_out_of_range"),
@@ -61,6 +75,26 @@ const exitPolicy = z.discriminatedUnion("type", [
     })
     .strict(),
   z.object({ type: z.literal("low_yield_exit"), min_fee_pct_per_hour: nonneg, window_minutes: pos, min_age_minutes: nonneg }).strict(),
+  // ---- Friday playbook (stage 1): time stop, and the scalp combination (time stop + out-of-range)
+  z.object({ type: z.literal("time_stop"), minutes: numOrList }).strict(),
+  z
+    .object({
+      type: z.literal("scalp"),
+      time_stop_minutes: pos,
+      oor_minutes: nonneg,
+      sl_pct: pos.optional(),
+      flow: z.object({ triggers: z.array(z.enum(FLOW_TRIGGER_NAMES)).min(1), ...flowThresholds }).strict().optional(),
+    })
+    .strict(),
+  // each entry of `sets` is one grid level: a single trigger, or `all` = Friday's four (any of)
+  z
+    .object({
+      type: z.literal("flow_trigger"),
+      sets: z.array(z.enum([...FLOW_TRIGGER_NAMES, "all"])).min(1),
+      ...flowThresholds,
+      time_stop_minutes: pos.optional(),
+    })
+    .strict(),
 ]);
 
 const opCounts = z
@@ -245,6 +279,22 @@ export const ConfigSchema = z
         pool_allowlist: z.array(z.string()),
         pool_denylist: z.array(z.string()),
         recheck_params_minutes: pos,
+        // Friday playbook: a second lane for freshly created memecoin pools (on top of max_pools)
+        fresh_lane: z
+          .object({
+            enabled: z.boolean(),
+            max_pools: z.number().int().min(0),
+            max_added_per_session: z.number().int().min(0),
+            refresh_minutes: pos,
+            min_age_minutes: nonneg,
+            max_age_minutes: pos,
+            bin_steps: z.array(z.number().int().min(1)).min(1),
+            min_base_fee_pct: nonneg,
+            max_base_fee_pct: pos,
+            min_tvl_usd: nonneg,
+            min_volume_1h_usd: nonneg,
+          })
+          .strict(),
       })
       .strict(),
     categories: z
@@ -290,6 +340,7 @@ export const ConfigSchema = z
           skip_bluechip_holders: z.boolean(),
           use_rugcheck: z.boolean(),
         }),
+        token_flow: collector({ interval_seconds: pos, max_age_seconds: pos }),
         token_audit: collector({
           interval_minutes: pos,
           pvp: z.object({ enabled: z.boolean(), min_rival_volume_24h_usd: nonneg }).strict(),
@@ -316,6 +367,15 @@ export const ConfigSchema = z
         exit_to: z.enum(["none", "quote"]),
         fee_event_interval_seconds: pos,
         pnl_eval_seconds: pos,
+        gap_taint: z
+          .object({
+            mode: z.enum(["proportional", "any_overlap"]),
+            max_fraction: frac,
+            max_single_gap_minutes: pos,
+            action_sources: z.array(z.string()).min(1),
+            defer_actions: z.boolean(),
+          })
+          .strict(),
         avoid_bin_array_init: z.boolean(),
         max_bins_per_position: z.number().int().min(1),
         costs: z
@@ -378,13 +438,13 @@ export const ConfigSchema = z
           .strict(),
         cooldown_enabled: z.array(z.boolean()).min(1).default([false]),
         cooldown_min_session_minutes: nonneg.default(0),
-        entry_filter: z.array(z.enum(["none", "supertrend_break", "rsi_reversal", "bollinger_reversion"])).min(1).default(["none"]),
+        entry_filter: z.array(z.enum(["none", "supertrend_break", "rsi_reversal", "bollinger_reversion", "flow_confirm"])).min(1).default(["none"]),
         cohort_interval_minutes: nonneg,
         max_positions: z.number().int().min(1),
       })
       .strict(),
     weights_profile: z.string(),
-    presets: z.object({ meridian: z.string() }).strict(),
+    presets: z.object({ meridian: z.string(), friday: z.string() }).strict(),
     memory: z
       .object({
         cooldown: z

@@ -225,6 +225,25 @@ report: ${rp.markdown}`);
     app.db.close();
   });
 
+sim
+  .command("retaint")
+  .description("re-evaluate the gap taint of a simulation session with the current rule (simulation.gap_taint)")
+  .requiredOption("-s, --session <id>", "simulation session")
+  .option("--dry-run", "only print what would change")
+  .option("--mode <mode>", "proportional | any_overlap (default: config)")
+  .action(async (opts) => {
+    const app = createApp(cfgPath());
+    const { retaintSession } = await import("./sim/retaint.ts");
+    const taint = opts.mode ? { ...app.lc.config.simulation.gap_taint, mode: opts.mode } : undefined;
+    const r = retaintSession(app.db, app.lc.config, opts.session, { dryRun: opts.dryRun, taint });
+    const pct = (n: number) => `${((n / Math.max(1, r.positions)) * 100).toFixed(0)}%`;
+    console.log(`positions ${r.positions}: tainted before ${r.before} (${pct(r.before)}), now ${r.after} (${pct(r.after)})${opts.dryRun ? " [dry run]" : ""}`);
+    console.log(`reasons: ${JSON.stringify(r.reasons)}`);
+    for (const x of r.sensitivity) console.log(`  max_fraction ${x.max_fraction}, max single gap ${x.max_single_gap_minutes} min -> clean ${x.clean} (${pct(x.clean)})`);
+    if (!opts.dryRun) console.log("run `dlmm report -s <session>` to rewrite the report");
+    app.db.close();
+  });
+
 program
   .command("report")
   .description("write the session report (Markdown + CSV) for a simulation session")

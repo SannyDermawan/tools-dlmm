@@ -1,6 +1,7 @@
 import type { Sides, Strategy } from "../config/schema.ts";
 import type { CostItem } from "./costs.ts";
 import type { RangeSpec } from "./distribution.ts";
+import type { GapInterval, TaintVerdict } from "./taint.ts";
 import type { ScalarExitPolicy } from "./policies.ts";
 
 export type Variant = "none" | "partial_harvest" | "fee_compounding" | "single_sided_reseed" | "wide_range";
@@ -74,6 +75,10 @@ export class VirtualPosition {
   maxDrawdownUsd = 0;
   maxDrawdownPct = 0;
   gapTainted = false;
+  /** data gaps overlapping the position (key source|start) and the times it acted (gap taint) */
+  gapIntervals = new Map<string, GapInterval>();
+  actionTimes: number[] = [];
+  taint: TaintVerdict | null = null;
   lastFeeEventTs = 0;
   crossCount = 0;
   rebalanceCount = 0;

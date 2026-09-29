@@ -1,4 +1,4 @@
-import { RateLimiter, RetryableError, withRetry } from "../util/async.ts";
+import { errText, RateLimiter, RetryableError, withRetry } from "../util/async.ts";
 import type { Logger } from "../util/logger.ts";
 import { redactUrl } from "../util/redact.ts";
 import type { UsageTracker } from "./usage.ts";
@@ -119,7 +119,7 @@ export class RpcClient {
         signal: this.o.signal,
         isRetryable: (e) => !(e instanceof RpcError),
         onRetry: (e, attempt, delay) =>
-          this.o.log?.warn({ method, attempt, delay, err: (e as Error).message, url: redactUrl(this.o.url) }, "rpc retry"),
+          this.o.log?.warn({ method, attempt, delay, err: errText(e), url: redactUrl(this.o.url) }, "rpc retry"),
       },
     );
   }

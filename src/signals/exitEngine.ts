@@ -148,6 +148,7 @@ export class ExitEngine {
 
   /** Evaluate every exit_engine position of a pool and apply the decisions. */
   run(sim: PoolSimulator, t: number) {
+    if (sim.priceStale(t)) return; // price data in a gap: decide on fresh data only
     for (const p of sim.list()) {
       if (p.status !== "active" || p.spec.exitPolicy?.type !== "exit_engine") continue;
       this.stats.evaluated++;

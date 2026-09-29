@@ -1,4 +1,4 @@
-import { RateLimiter, RetryableError, withRetry } from "../util/async.ts";
+import { errText, RateLimiter, RetryableError, withRetry } from "../util/async.ts";
 import type { Logger } from "../util/logger.ts";
 import type { UsageTracker } from "../chain/usage.ts";
 
@@ -122,7 +122,7 @@ export class JsonHttp {
         maxDelayMs: this.o.retry.max_delay_ms,
         signal: this.o.signal,
         isRetryable: (e) => !(e instanceof HttpError),
-        onRetry: (e, attempt, delay) => this.o.log?.warn({ label, attempt, delay, err: (e as Error).message }, "http retry"),
+        onRetry: (e, attempt, delay) => this.o.log?.warn({ label, attempt, delay, err: errText(e) }, "http retry"),
       },
     );
   }

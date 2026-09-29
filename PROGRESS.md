@@ -398,6 +398,210 @@ sessions, but two sessions (one −40% crash, one +9% pump) are not enough to dr
 that decision is left to `dlmm analyze` / `dlmm calibrate` after ≥ 5 sessions of 2 h.
 Tests: `test/costs.test.ts` (4); 220 tests total.
 
+## Data gaps: proportional taint, deferred actions, realism stats (2026-09-29, after the first laptop 2 h session)
+Session `1b7a58fc` (2 h, 20 pools, 6,449 positions) had 95% of its positions gap-tainted. What
+the log showed:
+- Every gap was a network outage on the laptop, not rate limiting: there was no HTTP 429 in the
+  whole session.
+- The logs had "fetch failed" and timeouts on every host at the same moment (Helius, Meteora,
+  Jupiter).
+- There were about 14 outages of 1–4 min, each hitting all 20 pools. Wi-Fi fully disconnected at
+  13:41 and 13:52. The laptop uses a 4G modem (2.4 GHz, signal 65%).
+
+Retry logs now include the network cause hidden behind "fetch failed" (`errText`: ENOTFOUND = DNS,
+ECONNRESET, UND_ERR_CONNECT_TIMEOUT...). That tells the next outage apart: DNS, Wi-Fi or the 4G
+uplink.
+
+**Taint rule** (`simulation.gap_taint`, `src/sim/taint.ts`). The old rule tainted a position on any
+overlap with a gap. The clean set was then only positions that lived about 2 minutes (early
+stop-outs), which is a strongly biased sample. A DLMM position's value depends only on the current
+active bin, and fees come from the gap-proof bin accumulators. So a gap in the middle of a position
+changes neither its fee nor its final value.
+
+A position is now tainted only when:
+- **an action happened during a price-data gap**: open, rebalance, partial exit, compound or close
+  while `pool_state` was stale. The interval is half-open `[start, end)`, so an action on the fresh
+  update that ends a gap stays clean;
+- **one gap was longer than `max_single_gap_minutes`** (5): exit rules could not react.
+
+A "share of the life without data" rule exists (`max_fraction`) but is off (1). It is biased:
+- **short-lived positions:** with the same gap minutes, positions stopped out early cross it and
+  get dropped. At 25% the dropped positions averaged −2.2%.
+- **gap sources:** `bin_snapshot` gaps do not make an action stale, because the price comes from
+  `pool_state`.
+
+**Deferred actions** (`gap_taint.defer_actions`). Rebalances during a price gap averaged −5.5%.
+The simulator re-centred on a stale price, and the position was out of range again when data came
+back. A real bot cannot trade without data either. So while a pool's `pool_state` is in a gap the
+grid runner and the exit engine now take no action: no entry, rebalance, exit or variant action.
+They act on the first fresh update. Other behaviour during and after an outage:
+- a cohort due during an outage that stops every pool opens on the first fresh tick;
+- a pool that alone is stale gets its entry deferred, keeping its cohort number;
+- session-end closes still happen.
+
+**Session 1b7a58fc re-evaluated.** `dlmm sim retaint` recomputes the taint from the journal and
+`data_gaps`, without re-simulating.
+
+| | tainted | clean avg net % | baseline | signal_watch | meridian_preset |
+|---|--:|--:|--:|--:|--:|
+| live run, old rule | 95% | −3.03 (312 positions, avg life 2 min) | | | |
+| live run, new rule | 3% | +0.165 | +0.18% | +0.10% | +1.76% (5) |
+
+Replayed with deferred actions (`-c config/session-2h.yaml sim replay`), session `53651a35`:
+- 6,797 positions, 3 cohorts, 0.7% tainted;
+- clean positions averaged +0.199%;
+- baseline +0.10%, signal_watch +0.60%, meridian_preset +1.71% (5 positions);
+- the pools the Meridian preset picked were worse than average for identical baseline positions
+  (−4.9 pp).
+
+This is one session and proves nothing about strategies.
+
+**Realism stats.** Relative fee differences are only computed when the real fee is material
+(≥ 0.01% of the deposit and ≥ $0.01). A real fee of $0.0001 had turned the mean into 16,818,597%.
+There is a new column with the fee difference in percentage points of the deposit.
+
+| | median fee diff | mean abs fee diff | PnL diff |
+|---|--:|--:|--:|
+| shape known (85 material fees) | −0.4% | 13.6% | 0.00 pp (mean abs 0.10) |
+
+Tests: `test/gapTaint.test.ts` (12). `test/phase2.test.ts` › "gap during a position taints it"
+still asserts the old any-overlap rule and fails. It must be updated to the new rule (a short
+middle gap no longer taints; see `gapTaint.test.ts`).
+
+## Friday's scalp playbook, stage 1 (2026-09-29)
+Friday is a manual DLMM trader who shares his playbook. Two things differ from our setup:
+- **Pools:** fresh memecoin pools with bin step 100 and base fee 2%.
+- **Positions:** Spot, two-sided, 69 bins. He exits on one flow trigger checked every minute,
+  closes near 15 min, and exits when the price leaves the range.
+
+Stage 1 makes this testable in the grid; nothing is adopted as a rule. It adds five parts.
+
+**Exit policies.**
+- `time_stop` (5 / 15 / 30 min).
+- `exit_out_of_range` also at 0 min (exit on the first update out of range).
+- `scalp`: time stop, out of range, and an optional stop loss.
+
+**Fresh lane** (`discovery.fresh_lane`). The Meteora API was verified on 2026-09-29: it can filter
+on `pool_created_at` (in ms) and `bin_step`, but not on base fee, so base fee is filtered on our
+side. The lane:
+- finds memecoin pools created in the last 6 h with bin step 100, a base fee of 1–5%, TVL ≥ $1k and
+  1 h volume ≥ $2k;
+- runs at session start and every 5 min **during** the session;
+- takes up to 4 fresh pools at once and 8 added per session, which bounds the RPC budget.
+
+Added pools join every collector: gaps, swap stream, and an immediate security and audit check.
+They also get a simulator and a scorer tracker. They enter the current cohort as soon as their data
+is complete, instead of waiting up to 30 min for the next cohort. Pools that have no data at cohort
+time now enter the same way. At the time of the check, new DLMM pools were rare: 2 in the last hour
+with bin step 80–125, with base fees of 1% and 0.8%, not 2%.
+
+**Entry mode `friday_scalp`** (`presets/friday.yaml`, `src/sim/friday.ts`).
+- **Screen:** bin step 100, base fee exactly 2% (computed from base_factor × bin_step), age ≤ 6 h,
+  TVL ≥ $1k, no mint or freeze authority. A pool without a security row is skipped.
+- **Position:** Spot, two-sided, 34 + 1 + 34 bins, exit `scalp:ts15m:oor0m`.
+- **Re-entry:** a new scalp in the same pool 5 min after the previous one closed, up to 6 per pool.
+- **Journal:** failures per filter are counted. Positions record trade number, pool age, base fee
+  and collect fee mode.
+- **Partial:** every position is flagged `preset_partial`. The 1-minute flow confirmation and the
+  four flow exits are stage 2.
+
+Reports and Telegram treat it as a baseline, like Meridian.
+
+**First look** (one replay of session 1b7a58fc, established pools, not Friday's kind of pool):
+
+| exit policy | avg net % |
+|---|--:|
+| hold_to_session_end | +0.69% |
+| exit_out_of_range 15 min | +0.19% |
+| exit_out_of_range 0 min | −0.10% |
+| time_stop 30 min | −0.29% |
+| time_stop 5 min | −0.66% |
+| time_stop 15 min | −0.95% |
+
+Fixed costs (about 0.3% of capital per round trip) dominate short holds unless the fee capture is
+large. That matches his own cost guide: a tracker PnL of +4.1% is needed just to break even. This
+is one session and proves nothing.
+
+Tests: `test/friday.test.ts` (11), 242 total. The one failure is the old `test/phase2.test.ts`
+taint test (see above).
+
+## Friday's scalp playbook, stage 2: one-minute flow (2026-09-29)
+**Pool flow per minute** comes from our own bin snapshots (`PoolTracker.minuteFlow`). It counts every
+swap, whether or not the swap stream sampled it.
+- **Volume** = LP fee from the bin accumulators ÷ LP fee rate.
+- **Net buy** = the change in Y reserves over bins whose supply did not change. Bins whose supply
+  changed are excluded, because an LP added or removed liquidity there.
+- A minute counts only when snapshots cover at least 80% of it.
+- For a pool whose risk token is Y, a Y inflow counts as a sell.
+
+**Token flow per minute** (`token_flow`, collector `collectors.token_flow`): one batch per minute to
+Jupiter.
+- From tokens v2: holders, plus 5-minute buy and sell stats.
+- From the unofficial datapi: bundler holding %.
+- Checked live: 15 tokens per request. `bundlerStats.holdingPct` is **already a percentage**
+  (values up to 4.3), not a fraction. Phase 10 had stored it ×100; migration `013_bundler_units`
+  corrects the old rows, which fed no decision.
+
+**Flow exits** (`src/sim/flow.ts`), Friday's numbers as defaults:
+- bundler −2 points in a minute;
+- net buy ≤ −$5,000 in the last minute;
+- holders −10% vs a minute earlier;
+- volume −20% vs the previous minute;
+- our relative variant `net_buy_rel`: net sell ≥ 5% of TVL.
+
+How they run:
+- Missing data never fires a trigger.
+- The first check is one minute after the open.
+- `confirm_seconds` (0 = Friday's "no second confirmation") is optional.
+- Grid policy `flow_trigger` has one level per trigger plus `all` (his four), so each trigger is
+  measured separately. `scalp` can carry a flow exit.
+
+**Entry confirmation** (`flowConfirm`):
+- The checks: volume rose in each of the last 2 minutes, net buy > 0 in the current minute, holders
+  growing, and bundlers "stable or falling slowly" (−2 to +0.5 points).
+- Pool-level checks must have data. A token check without data is skipped and the position is
+  flagged partial.
+- `friday_scalp` now enters **whenever** the confirmation passes (checked every 30 s), not only at
+  cohorts. The grid can use it as `entry_filter: flow_confirm`, which stays off by default.
+
+`friday_scalp` runs the whole playbook. It is `preset_partial` only when a token input was missing.
+
+**First replay** of session 1b7a58fc (established pools):
+
+| flow exit level | positions it closed | avg hold | avg net % |
+|---|--:|--:|--:|
+| hold_to_session_end (reference) | – | – | +0.96% |
+| net_buy −$5,000 | 54% | 39 min | +0.38% |
+| net_buy_rel | 4% | – | +0.39% |
+| volume −20% | 100% | 2 min | −0.57% |
+| all four | 100% | 2 min | −0.59% |
+
+Minute-to-minute volume is noise, so a 20% drop happens almost every minute. That confirms the
+concern about this trigger. There was no token data for that session yet, so the holders and
+bundler levels behaved like hold and **must not be read** from this replay. It was one session, not
+Friday's kind of pool, and proves nothing.
+
+Tests: `test/friday.test.ts` (32 with stage 1); 251 total. The one failure is still the old
+`phase2` taint test.
+
+Two noise-robust volume variants are extra grid levels; Friday's original stays:
+- `volume_avg3`: the last minute vs the mean of the 3 before;
+- `flow:volume:c60s`: the drop must still hold 60 s later.
+
+Replay of 1b7a58fc, clean positions:
+
+| exit level | positions it closed | avg hold | avg net % |
+|---|--:|--:|--:|
+| net_buy_rel | 3% | – | +0.97% |
+| hold_to_session_end (reference) | – | – | +0.65% |
+| net_buy | 53% | – | +0.33% |
+| volume c60s | 82% | 25 min | −0.32% |
+| volume_avg3 | 100% | 5 min | −0.31% |
+| volume (Friday) | 100% | 2 min | −0.45% |
+
+Every volume trigger still loses against holding in established pools. Keep them in the grid only
+to measure them in fresh pools.
+
 ## RPC: Helius Free + swap stream redesign (2026-09-29)
 - `.env` points to Helius (Free: 1M credits/month, 10 rps). Rate limits: critical 3 rps +
   swap stream 5 rps + token security 0.75 rps.
