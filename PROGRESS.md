@@ -329,7 +329,13 @@ Against the API alone, 11/20 pools were within ±5% (window 19:15–20:00).
 - Calibration on real positions, kept separate: `dlmm calibrate --source real_lp`.
 - Live (cloud, Helius): 8 pools = 10.7k open positions; one in-session scan 14 min after the first
   saw 110 opened / 153 closed, decoded 109 shapes (60 bidask, 46 spot, 3 curve).
-- Tests: `test/phase11.test.ts` (17).
+- First realism check (validation session `03902546`, 30 min, 8 pools, 0 gaps, ~1.7k Helius
+  credits): 17 simple real positions replayed; fee median −0.1%, mean |diff| 16%; PnL −2.7 pp of
+  capital, the whole bias from 4 quote-only positions labelled "curve". Cause: shapes were anchored
+  on the price at scan time; fixed (price-side edge / price at open). Re-run with every shape
+  unknown (spot): fee mean |diff| 210% — the shape matters a lot, so realism is only measured on
+  positions scanned with the fixed classifier.
+- Tests: `test/phase11.test.ts` (18).
 
 ## Phase 12 — Telegram, read-only (addendum 5) ✅ (no bot token here: tested with a fake client)
 - `src/notify/` works only from the database, so it runs inside a live session
