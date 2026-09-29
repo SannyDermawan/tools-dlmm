@@ -12,6 +12,11 @@ export interface RangeSpec {
   binsBelow: number;
   /** bins above the active bin (two_sided / base_only) */
   binsAbove: number;
+  /**
+   * Mix of two shapes over the same range (Yunus flip: 70% bid-ask + 30% spot): `share` of every
+   * side's amount is laid out with `strategy`, the rest with the main one. Absent = a single shape.
+   */
+  blend?: { strategy: Strategy; share: number };
 }
 
 export interface BinAmount {
@@ -86,6 +91,7 @@ const sum = (bins: BinAmount[], k: "x" | "y") => bins.reduce((s, b) => s + b[k],
  * scaled up and re-distributed, never exceeding the target.
  */
 export function distributeFull(activeId: number, binStep: number, r: RangeSpec, targetX: bigint, targetY: bigint): BinAmount[] {
+  if (r.blend) return distributeBlend(activeId, binStep, r, targetX, targetY);
   let inX = targetX;
   let inY = targetY;
   let best = distributeLiquidity(activeId, binStep, r, inX, inY);
@@ -104,6 +110,26 @@ export function distributeFull(activeId: number, binStep: number, r: RangeSpec, 
   return best;
 }
 
+/** Two shapes over one range: the amounts are split by `blend.share` (per mille), laid out separately and summed per bin. */
+function distributeBlend(activeId: number, binStep: number, r: RangeSpec, targetX: bigint, targetY: bigint): BinAmount[] {
+  const b = r.blend!;
+  const share = BigInt(Math.round(Math.min(1, Math.max(0, b.share)) * 1000));
+  const part = (v: bigint) => (v * share) / 1000n;
+  const main: RangeSpec = { strategy: r.strategy, sides: r.sides, binsBelow: r.binsBelow, binsAbove: r.binsAbove };
+  const second: RangeSpec = { ...main, strategy: b.strategy };
+  const out = new Map<number, BinAmount>();
+  const add = (bins: BinAmount[]) => {
+    for (const x of bins) {
+      const cur = out.get(x.binId);
+      if (cur) out.set(x.binId, { binId: x.binId, x: cur.x + x.x, y: cur.y + x.y });
+      else out.set(x.binId, x);
+    }
+  };
+  if (share < 1000n) add(distributeFull(activeId, binStep, main, targetX - part(targetX), targetY - part(targetY)));
+  if (share > 0n) add(distributeFull(activeId, binStep, second, part(targetX), part(targetY)));
+  return [...out.values()].sort((a, c) => a.binId - c.binId);
+}
+
 /** Fraction of capital placed as X for a range: auto = proportional to ask-side bin count. */
 export function xValueFraction(r: RangeSpec, setting: "auto" | number): number {
   if (r.sides === "base_only") return 1;
@@ -113,4 +139,25 @@ export function xValueFraction(r: RangeSpec, setting: "auto" | number): number {
   const total = maxDelta - minDelta + 1;
   const ask = favorX ? maxDelta + 1 : maxDelta;
   return ask / total;
+}
+
+/**
+ * Bins that cover a downside price move of `pct` % at a bin step (bps): price falls by (1+step)^-n,
+ * so n = ln(1 - pct/100) / ln(1/(1+step)). 70 bins are -50% at step 100 but only -6.8% at step 10.
+ */
+export function binsForRangePct(pct: number, binStep: number): number {
+  const n = Math.round(-Math.log(1 - pct / 100) / Math.log(1 + binStep / 10_000));
+  return Math.max(1, n);
+}
+
+/** Downside price move (%) covered by `bins` bins at a bin step. */
+export const downsidePct = (bins: number, binStep: number) => (bins <= 0 ? 0 : 100 * (1 - Math.pow(1 + binStep / 10_000, -bins)));
+
+/** Upside price move (%) covered by `bins` bins at a bin step. */
+export const upsidePct = (bins: number, binStep: number) => (bins <= 0 ? 0 : 100 * (Math.pow(1 + binStep / 10_000, bins) - 1));
+
+/** Bins that cover an upside price move of `pct` %: n = ln(1 + pct/100) / ln(1 + step). */
+export function binsForUpPct(pct: number, binStep: number): number {
+  const n = Math.round(Math.log(1 + pct / 100) / Math.log(1 + binStep / 10_000));
+  return Math.max(1, n);
 }

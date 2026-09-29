@@ -469,6 +469,22 @@ lpCmd
     app.db.close();
   });
 lpCmd
+  .command("outcomes")
+  .description("outcomes of real positions that opened while we watched, followed to closure (survival + PnL by width / shape / hold time, censoring-aware)")
+  .option("-p, --pool <address...>", "only these pools")
+  .option("--since-hours <h>", "only positions first seen within the last N hours", parseFloat)
+  .option("--min-deposit <usd>", "ignore PnL of positions with a smaller deposit", parseFloat, 20)
+  .action(async (opts) => {
+    const app = createApp(cfgPath());
+    const { lpOutcomes, lpOutcomesMarkdown } = await import("./analysis/lpOutcomes.ts");
+    const r = lpOutcomes(app.db, {
+      pools: opts.pool, minDepositUsd: opts.minDeposit,
+      since: opts.sinceHours !== undefined ? Date.now() - opts.sinceHours * 3_600_000 : undefined,
+    });
+    console.log(lpOutcomesMarkdown(r));
+    app.db.close();
+  });
+lpCmd
   .command("wallets")
   .description("recompute lp_wallets and list the best wallets")
   .option("-n, --top <n>", "rows", (v) => parseInt(v, 10), 20)
@@ -491,7 +507,7 @@ program
   .description("sequential account over stored positions: one at a time, compounding, daily stop (Friday-style calendar and drawdown)")
   .option("-s, --session <id...>", "simulation session(s); several are chained by time")
   .option("--last <n>", "the last N finished live sessions", (v) => parseInt(v, 10))
-  .requiredOption("-m, --mode <mode>", "entry mode: friday_scalp, meridian_preset, signal_enter, signal_watch, all_pools_baseline")
+  .requiredOption("-m, --mode <mode>", "entry mode: friday_scalp, yunus_flip, meridian_preset, signal_enter, signal_watch, all_pools_baseline")
   .option("-w, --where <filter...>", "grid_combo filters: key=value or key~prefix, e.g. exit_policy~scalp bins_per_side=34 strategy=spot")
   .option("--capital <usd>", "starting capital", parseFloat)
   .option("--fraction <f>", "share of the equity per trade (1 = all, compounding)", parseFloat)

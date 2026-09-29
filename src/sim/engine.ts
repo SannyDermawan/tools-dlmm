@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Config } from "../config/schema.ts";
+import type { Config, Strategy } from "../config/schema.ts";
 import type { BinObs, BinSnapshot, PoolMeta, PoolStateUpdate, SwapRecord } from "../collectors/types.ts";
 import { binRawPrice } from "../math/bin.ts";
 import { CostModel, type CostContext, type CostItem } from "./costs.ts";
@@ -115,6 +115,11 @@ export class PoolSimulator {
 
   get now(): number {
     return this.state?.ts ?? 0;
+  }
+
+  /** latest pool price (quote per base, UI units) or null before the first state */
+  get priceUi(): number | null {
+    return this.state?.priceUi ?? null;
   }
 
   list(): VirtualPosition[] {
@@ -536,24 +541,35 @@ export class PoolSimulator {
     return true;
   }
 
+  /** Share (0..1) of a position's liquid value that is base token (X) at the current price; null when unknown. */
+  xShare(id: string): number | null {
+    const p = this.positions.get(id);
+    if (!p || p.status !== "active" || !this.state || !this.market.quoteUsd) return null;
+    const v = this.valuation(p);
+    const liquid = v.valueUsd - p.realizedQuote * this.market.quoteUsd;
+    if (liquid <= 0) return null;
+    const xUsd = (v.x / 10 ** this.meta.decimalsX) * this.state.priceUi * this.market.quoteUsd;
+    return xUsd / liquid;
+  }
+
   /**
    * single_sided_reseed (addendum 2.2): when price fell below the range and the position is
    * (almost) entirely base token, withdraw it and reopen base-only above the new active bin with
    * the same number of bins. Charged like a rebalance (withdraw + deposit tx, new bin arrays; the
    * balancing swap is ~0 because the tokens already are base).
    */
-  reseed(id: string, ts = this.now, minXShare = 0.99): boolean {
+  reseed(id: string, ts = this.now, minXShare = 0.99, opts: { binsAbove?: number; strategy?: Strategy; blend?: RangeSpec["blend"]; reason?: string } = {}): boolean {
     const p = this.positions.get(id);
     if (!p || p.status !== "active" || !this.state || !this.market.quoteUsd) return false;
     const st = this.state;
     if (st.activeId >= p.lower) return false;
-    const v = this.valuation(p);
-    const liquid = v.valueUsd - p.realizedQuote * this.market.quoteUsd;
-    const xUsd = (v.x / 10 ** this.meta.decimalsX) * st.priceUi * this.market.quoteUsd;
-    if (liquid <= 0 || xUsd / liquid < minXShare) return false;
+    const share = this.xShare(id);
+    if (share === null || share < minXShare) return false;
     const n = binCount(rangeOf(p));
-    const r: RangeSpec = { strategy: p.spec.strategy, sides: "base_only", binsBelow: 0, binsAbove: Math.max(0, n - 1) };
-    if (!this.rebalance(id, "single_sided_reseed", ts, r)) return false;
+    const above = opts.binsAbove ?? Math.max(0, n - 1);
+    if (above + 1 > this.sim.max_bins_per_position) return false;
+    const r: RangeSpec = { strategy: opts.strategy ?? p.spec.strategy, sides: "base_only", binsBelow: 0, binsAbove: above, ...(opts.blend ? { blend: opts.blend } : {}) };
+    if (!this.rebalance(id, opts.reason ?? "single_sided_reseed", ts, r)) return false;
     p.rebalanceCount--; // a reseed is counted separately from rebalances
     p.reseeds++;
     return true;

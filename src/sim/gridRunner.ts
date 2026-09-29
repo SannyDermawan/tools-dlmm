@@ -8,7 +8,10 @@ import { FRIDAY_CONFIRM, flowConfirm, flowTriggers, netBuyUsd, type FlowSnapshot
 import { expandExitPolicies, exitPolicyLabel, flowExitOf, isPnlPolicy, newTrailing, oorRule, pnlDecision, type TrailingState } from "./policies.ts";
 import type { SignalBook } from "../signals/signalEngine.ts";
 import type { ExitEngine } from "../signals/exitEngine.ts";
+import { binsForRangePct, binsForUpPct, downsidePct, upsidePct } from "./distribution.ts";
 import { entryFilterPass, type EntryFilter, type TfSnapshot } from "../features/indicators.ts";
+import { athDrawdownPct } from "../features/ath.ts";
+import { evaluateYunus, loadYunusPreset, yunusCombos, yunusDownside, type YunusCombo, type YunusPreset } from "./yunus.ts";
 
 export type SessionPhase = "warmup" | "active" | "closing" | "ended";
 
@@ -61,13 +64,15 @@ export class SessionClock {
 export { exitPolicyLabel };
 
 /** Entry modes that need the decision stack (signals / preset inputs) — skipped without it. */
-const SIGNAL_MODES = new Set(["signal_enter", "signal_watch", "meridian_preset", "friday_scalp"]);
+const SIGNAL_MODES = new Set(["signal_enter", "signal_watch", "meridian_preset", "friday_scalp", "yunus_flip"]);
 /** Entry modes that open their own fixed preset position instead of the grid combinations. */
-const PRESET_MODES = new Set(["meridian_preset", "friday_scalp"]);
+const PRESET_MODES = new Set(["meridian_preset", "friday_scalp", "yunus_flip"]);
 /** Entry modes that run with and without the pool cooldown (grid.cooldown_enabled). */
 const COOLDOWN_MODES = new Set(["signal_enter", "signal_watch"]);
 
 /** Deterministic PRNG (mulberry32) for reproducible grid samples. */
+const round = (v: number, d: number) => Math.round(v * 10 ** d) / 10 ** d;
+
 export function rng(seed: number): () => number {
   let a = seed >>> 0;
   return () => {
@@ -128,7 +133,9 @@ export function gridCombos(c: Config, opts: { allowSignalModes?: boolean; sessio
   const g = c.grid;
   const policies = expandExitPolicies(g.exit_policies);
   const filters = g.entry_filter;
-  const dims = [g.strategies.length, g.bins_per_side.length, g.sides.length, policies.length, g.variants.length, filters.length];
+  // width levels: fixed bin counts, then price-% levels (resolved to bins per pool at the open)
+  const widths: { bins?: number; pct?: number }[] = [...g.bins_per_side.map((bins) => ({ bins })), ...g.range_pct.map((pct) => ({ pct }))];
+  const dims = [g.strategies.length, widths.length, g.sides.length, policies.length, g.variants.length, filters.length];
   const sample = g.sampling.mode === "full" ? balancedSample(dims, Number.MAX_SAFE_INTEGER, 0) : balancedSample(dims, g.sampling.max_combos, g.sampling.seed);
   const wide = g.variant_params.wide_range;
   const modes = g.entry_modes.filter((m) => !PRESET_MODES.has(m) && (opts.allowSignalModes || !SIGNAL_MODES.has(m)));
@@ -145,16 +152,20 @@ export function gridCombos(c: Config, opts: { allowSignalModes?: boolean; sessio
       const variant = g.variants[vi];
       const isWide = variant === "wide_range";
       const strategy = isWide ? wide.strategy : g.strategies[si];
-      const n = isWide ? wide.bins_per_side[bi % wide.bins_per_side.length] : g.bins_per_side[bi];
+      const w: { bins?: number; pct?: number } = isWide
+        ? wide.range_pct.length ? { pct: wide.range_pct[bi % wide.range_pct.length] } : { bins: wide.bins_per_side[bi % wide.bins_per_side.length] }
+        : widths[bi];
+      const n = w.bins ?? 0; // price-% widths get their bins per pool when the position is requested
       const sides = g.sides[di];
       const exitPolicy = policies[pi];
       out.push({
         strategy, sides, exitPolicy, entryMode, variant, cooldownEnabled, entryFilter,
+        ...(w.pct !== undefined ? { rangePct: w.pct } : {}),
         binsBelow: sides === "base_only" ? 0 : n,
         binsAbove: sides === "quote_only" ? 0 : n,
         capitalUsd: c.simulation.virtual_capital_usd,
         combo: {
-          entry_mode: entryMode, strategy, bins_per_side: n, sides, exit_policy: exitPolicyLabel(exitPolicy), variant,
+          entry_mode: entryMode, strategy, ...(w.pct !== undefined ? { range_pct: w.pct } : { bins_per_side: n }), sides, exit_policy: exitPolicyLabel(exitPolicy), variant,
           sampling: g.sampling.mode,
           entry_filter: entryFilter,
           ...(cooldownEnabled !== null ? { cooldown: cooldownEnabled } : {}),
@@ -190,12 +201,16 @@ export interface GridStats {
   preset: { evaluated: number; passed: number; opened: number; partial: number };
   /** Friday playbook entries: pools screened, positions opened (first + re-entries), screen failures */
   friday: { evaluated: number; opened: number; reentries: number; failed: Record<string, number> };
+  /** Yunus flip entries: combinations screened, cycles opened (first + re-entries), flips done, cycles completed, screen failures */
+  yunus: { evaluated: number; opened: number; reentries: number; flips: number; cycles: number; failed: Record<string, number> };
   /** signal-mode positions not opened because the pool was in cooldown (phase 10) */
   cooldownSkips: number;
   /** pool entries that waited for fresh price data (cohort time fell into a data gap) */
   deferredEntries: number;
   /** positions not opened because their indicator entry filter did not pass, by filter and reason (phase 13) */
   filterSkips: Record<string, number>;
+  /** grid positions not opened because a price-% width needed more bins than a position holds in that pool */
+  widthSkips: number;
   /** event entries of the signal modes (grid.signal_entry): rising edges seen, entries made, what stopped the rest */
   events: { detected: number; opened: number; skipped: Record<string, number> };
   capped: boolean;
@@ -215,12 +230,18 @@ export interface GridSignals {
   indicators?: { at(pool: string, t: number): Record<string, TfSnapshot> | null };
   /** preset override (tests); default: loaded from config presets.meridian */
   preset?: MeridianPreset;
+  /** risk token facts at t for the journal (coin selection dimensions in the report) */
+  tokenInfo?: (pool: string, t: number) => { tokenAgeHours: number | null; mcapUsd: number | null; /** the risk token is the base token X */ riskIsBase?: boolean } | null;
+  /** highest price (pool quote units) seen up to t, only for pools whose risk token is the base (ath_drawdown_pct) */
+  ath?: (pool: string, t: number) => number | null;
   /** one-minute flow of a pool at t (flow exits, Friday entry confirmation) */
   flow?: (pool: string, t: number) => FlowSnapshot | null;
   /** Friday screen inputs of a pool at t (entry mode friday_scalp) */
   fridayInputs?: (pool: string, t: number) => FridayInputs | null;
   /** preset override (tests); default: loaded from config presets.friday */
   friday?: FridayPreset;
+  /** preset override (tests); default: loaded from config presets.yunus */
+  yunus?: YunusPreset;
 }
 
 /** Per-position runtime state of the PnL policies and variants. */
@@ -230,6 +251,8 @@ interface PosRuntime {
   flowPending: number | null;
   feeHist: { t: number; feeUsd: number }[];
   lastCompound: number;
+  /** lowest net PnL % seen since the open (breakeven_exit) */
+  worstPct: number;
 }
 
 /**
@@ -255,10 +278,14 @@ export class GridRunner {
   readonly friday: FridayPreset | null = null;
   /** friday_scalp trades per pool (count, last close / open time) */
   private readonly fridayTrades = new Map<string, { n: number; positionId: string }>();
+  readonly yunus: YunusPreset | null = null;
+  readonly yunusCombos: YunusCombo[] = [];
+  /** yunus_flip cycles per pool and combination */
+  private readonly yunusTrades = new Map<string, { n: number; positionId: string }>();
   readonly stats: GridStats = {
     cohorts: 0, requested: 0, skippedPools: 0, rebalances: 0, policyExits: 0, rebalanceNotWorth: 0, signalEntries: {}, pnlExits: {},
     variantActions: { partial_harvest: 0, fee_compounding: 0, single_sided_reseed: 0 },
-    preset: { evaluated: 0, passed: 0, opened: 0, partial: 0 }, friday: { evaluated: 0, opened: 0, reentries: 0, failed: {} }, cooldownSkips: 0, filterSkips: {}, deferredEntries: 0, events: { detected: 0, opened: 0, skipped: {} }, capped: false,
+    preset: { evaluated: 0, passed: 0, opened: 0, partial: 0 }, friday: { evaluated: 0, opened: 0, reentries: 0, failed: {} }, yunus: { evaluated: 0, opened: 0, reentries: 0, flips: 0, cycles: 0, failed: {} }, cooldownSkips: 0, filterSkips: {}, deferredEntries: 0, widthSkips: 0, events: { detected: 0, opened: 0, skipped: {} }, capped: false,
   };
   /** latest signal action per pool at the previous scoring round (rising-edge detection) */
   private readonly lastAction = new Map<string, string | null>();
@@ -292,6 +319,14 @@ export class GridRunner {
         log?.error({ err: (e as Error).message, path: c.presets.friday }, "friday preset not loaded; entry mode skipped");
       }
     }
+    if (signals && c.grid.entry_modes.includes("yunus_flip")) {
+      try {
+        this.yunus = signals.yunus ?? loadYunusPreset(c.presets.yunus);
+        this.yunusCombos = yunusCombos(this.yunus, exitPolicyLabel);
+      } catch (e) {
+        log?.error({ err: (e as Error).message, path: c.presets.yunus }, "yunus preset not loaded; entry mode skipped");
+      }
+    }
     this.nextCohortAt = clock.warmupEnd;
   }
 
@@ -307,6 +342,8 @@ export class GridRunner {
       this.retryPendingEvents(ts);
       // Friday playbook: a new scalp in a pool reentry.minutes after the previous one closed
       if (this.friday && this.cohort > 0 && this.clock.phase(ts) === "active") this.openFriday(ts, this.cohort, true);
+      // Yunus playbook: a new cycle after the previous one closed (cooldown, cycle cap)
+      if (this.yunus && this.cohort > 0 && this.clock.phase(ts) === "active") this.openYunus(ts, this.cohort, true);
     }
     this.openDeferred(ts);
     if (this.clock.phase(ts) !== "active" || ts < this.nextCohortAt) return;
@@ -337,6 +374,7 @@ export class GridRunner {
     this.stats.cohorts++;
     let opened = this.openPreset(ts);
     opened += this.openFriday(ts, this.cohort, false);
+    opened += this.openYunus(ts, this.cohort, false);
     for (const sim of this.sims.values()) {
       if (!sim.ready) {
         // no data yet (e.g. a pool added during the session): enter once its data is complete
@@ -371,6 +409,7 @@ export class GridRunner {
       this.deferred.delete(pool);
       if (this.openPool(sim, ts, cohort)) return;
       this.openFriday(ts, cohort, false, pool);
+      this.openYunus(ts, cohort, false, pool);
     }
   }
 
@@ -380,6 +419,40 @@ export class GridRunner {
    */
   onPoolAdded(pool: string) {
     if (this.cohort > 0 && !this.deferred.has(pool)) this.deferred.set(pool, this.cohort);
+  }
+
+  /**
+   * Bins of a price-% width for this pool (grid range_pct): n = ln(1-pct) / ln(1/(1+step)); null when
+   * that needs more bins than one position holds. Fixed-bin widths pass through unchanged.
+   */
+  private resolveWidth(sim: PoolSimulator, spec: PositionSpec): PositionSpec | null {
+    if (spec.rangePct === undefined) return spec;
+    const n = binsForRangePct(spec.rangePct, sim.meta.binStep);
+    const below = spec.sides === "base_only" ? 0 : n;
+    const above = spec.sides === "quote_only" ? 0 : n;
+    if (below + above + 1 > this.c.simulation.max_bins_per_position) return null;
+    return { ...spec, binsBelow: below, binsAbove: above, combo: { ...spec.combo, bins_per_side: n } };
+  }
+
+  /**
+   * Every position goes through here: journals what the report slices by (width in price %, token
+   * age, market cap, pool age at the entry) and requests it from the pool's simulator.
+   */
+  private requestPos(sim: PoolSimulator, spec: PositionSpec, ts: number) {
+    const m = sim.meta;
+    const ti = this.signals?.tokenInfo?.(m.pool, ts) ?? null;
+    const px = sim.priceUi;
+    const dd = px ? athDrawdownPct(px, this.signals?.ath?.(m.pool, ts) ?? null) : null;
+    const combo = {
+      ...spec.combo,
+      ath_drawdown_pct: dd === null ? null : round(dd, 1),
+      range_down_pct: round(downsidePct(spec.binsBelow, m.binStep), 2),
+      range_up_pct: round(upsidePct(spec.binsAbove, m.binStep), 2),
+      pool_age_h: m.createdAt ? round((ts - m.createdAt) / 3_600_000, 2) : null,
+      token_age_h: ti?.tokenAgeHours != null ? round(ti.tokenAgeHours, 2) : null,
+      mcap_usd: ti?.mcapUsd != null ? Math.round(ti.mcapUsd) : null,
+    };
+    return sim.request({ ...spec, combo }, ts);
   }
 
   /** Open the grid of one pool for a cohort. Returns true when grid.max_positions was reached. */
@@ -427,15 +500,21 @@ export class GridRunner {
           this.lastOpened = opened;
           return true;
         }
-        const matches = !!rec && rec.strategy === spec.strategy && rec.sides === spec.sides &&
-          rec.bins_below === spec.binsBelow && rec.bins_above === spec.binsAbove;
-        sim.request(
+        const resolved = this.resolveWidth(sim, spec);
+        if (!resolved) {
+          this.stats.widthSkips++; // a price-% width that needs more bins than one position can hold in this pool
+          continue;
+        }
+        const matches = !!rec && rec.strategy === resolved.strategy && rec.sides === resolved.sides &&
+          rec.bins_below === resolved.binsBelow && rec.bins_above === resolved.binsAbove;
+        this.requestPos(
+          sim,
           {
-            ...spec,
+            ...resolved,
             cohort: cohortNo,
             signalId: sig?.signal_id ?? null,
             combo: {
-              ...spec.combo, cohort: cohortNo, signal_action: sig?.action ?? null, signal_score: sig?.final_score ?? null,
+              ...resolved.combo, cohort: cohortNo, signal_action: sig?.action ?? null, signal_score: sig?.final_score ?? null,
               matches_recommendation: matches, ...(signalMode ? { entry_trigger: trigger } : {}),
             },
           },
@@ -484,7 +563,8 @@ export class GridRunner {
       const binsBelow = s.sides === "base_only" ? 0 : s.bins_below;
       const binsAbove = s.sides === "two_sided" ? s.bins_below : 0;
       const partial = ev.missing.length > 0;
-      sim.request(
+      this.requestPos(
+        sim,
         {
           strategy: s.shape, sides: s.sides, binsBelow, binsAbove, exitPolicy, variant: "none",
           entryMode: "meridian_preset", capitalUsd: this.c.simulation.virtual_capital_usd,
@@ -551,7 +631,8 @@ export class GridRunner {
       const exitPolicy = fridayExitPolicy(pr);
       const sig = this.signals?.book.latestFor(sim.meta.pool, ts) ?? null;
       const n = (prev?.n ?? 0) + 1;
-      const p = sim.request(
+      const p = this.requestPos(
+        sim,
         {
           strategy: s.shape, sides: s.sides, exitPolicy, variant: "none", entryMode: "friday_scalp",
           binsBelow: s.sides === "base_only" ? 0 : s.bins_per_side, binsAbove: s.sides === "quote_only" ? 0 : s.bins_per_side,
@@ -577,6 +658,100 @@ export class GridRunner {
       opened++;
     }
     return opened;
+  }
+
+  /**
+   * yunus_flip: per pool and combination one bid-ask quote-only position below the price (width in
+   * price %, from the price or from the ATH), which flips base-only above once it is fully in the
+   * token (see tryFlip) and ends by its exit policy or when it is back in quote. A new cycle opens
+   * reentry.cooldown_minutes after the previous one closed, up to reentry.max_cycles_per_pool.
+   */
+  private openYunus(ts: number, cohortNo: number, reentry: boolean, only?: string): number {
+    const pr = this.yunus;
+    const inputs = this.signals?.fridayInputs;
+    if (!pr || !inputs || !this.yunusCombos.length) return 0;
+    let opened = 0;
+    for (const sim of this.sims.values()) {
+      if (only && sim.meta.pool !== only) continue;
+      if (!sim.ready || sim.priceStale(ts)) continue;
+      const pool = sim.meta.pool;
+      // which combinations of this pool may open a (new) cycle now
+      const due = this.yunusCombos.filter((c) => {
+        const prev = this.yunusTrades.get(`${pool}|${c.key}`);
+        if (!prev) return !reentry;
+        const p = sim.get(prev.positionId);
+        if (p && (p.status === "active" || p.status === "pending")) return false; // one cycle at a time
+        if (prev.n >= pr.reentry.max_cycles_per_pool) return false;
+        const since = p?.closedAt ?? p?.requestedAt ?? 0;
+        return ts - since >= pr.reentry.cooldown_minutes * 60_000;
+      });
+      if (!due.length) continue;
+      const px = sim.priceUi;
+      const ath = this.signals?.ath?.(pool, ts) ?? null;
+      const ti = this.signals?.tokenInfo?.(pool, ts) ?? null;
+      const fi = inputs(pool, ts);
+      if (!fi) continue;
+      this.stats.yunus.evaluated++;
+      const failed = evaluateYunus(pr, {
+        tvlUsd: fi.tvlUsd, category: sim.meta.category, riskIsBase: ti?.riskIsBase ?? null,
+        mintAuthority: fi.mintAuthority, freezeAuthority: fi.freezeAuthority,
+        mcapUsd: ti?.mcapUsd ?? null, tokenAgeHours: ti?.tokenAgeHours ?? null, athDrawdownPct: px ? athDrawdownPct(px, ath) : null,
+      });
+      if (failed.length) {
+        for (const f of failed) this.stats.yunus.failed[f] = (this.stats.yunus.failed[f] ?? 0) + 1;
+        continue;
+      }
+      const sig = this.signals?.book.latestFor(pool, ts) ?? null;
+      for (const c of due) {
+        const d = yunusDownside(pr, c, px, ath);
+        if ("skip" in d) {
+          this.stats.yunus.failed[d.skip] = (this.stats.yunus.failed[d.skip] ?? 0) + 1;
+          continue;
+        }
+        const bins = binsForRangePct(d.pct, sim.meta.binStep);
+        if (bins + 1 > this.c.simulation.max_bins_per_position) {
+          this.stats.widthSkips++;
+          continue;
+        }
+        if (this.full()) return opened;
+        const prev = this.yunusTrades.get(`${pool}|${c.key}`);
+        const n = (prev?.n ?? 0) + 1;
+        const p = this.requestPos(
+          sim,
+          {
+            strategy: pr.entry.shape, sides: "quote_only", binsBelow: bins, binsAbove: 0, exitPolicy: c.exit, variant: "none", flip: c.flip,
+            entryMode: "yunus_flip", capitalUsd: this.c.simulation.virtual_capital_usd, cohort: cohortNo, signalId: sig?.signal_id ?? null,
+            combo: {
+              entry_mode: "yunus_flip", strategy: pr.entry.shape, bins_per_side: bins, sides: "quote_only", range_pct: c.widthPct, anchor: c.anchor,
+              flip_shape: c.flipName, exit_policy: c.exitLabel, variant: "none", cohort: cohortNo, cycle_no: n, reentry: !!prev, at_cohort: !reentry,
+              signal_action: sig?.action ?? null, signal_score: sig?.final_score ?? null,
+              base_fee_pct: baseFeePct(sim.meta), collect_fee_mode: sim.meta.collectFeeMode,
+            },
+          },
+          ts,
+        );
+        this.yunusTrades.set(`${pool}|${c.key}`, { n, positionId: p.id });
+        this.stats.requested++;
+        this.stats.yunus.opened++;
+        if (prev) this.stats.yunus.reentries++;
+        this.stats.signalEntries.yunus_flip = (this.stats.signalEntries.yunus_flip ?? 0) + 1;
+        opened++;
+      }
+    }
+    return opened;
+  }
+
+  /**
+   * Yunus flip: once the price fell through the whole range and the position is (almost) all token,
+   * redeploy it base-only above the new price (optionally as a shape mix), up to max_flips times.
+   */
+  private tryFlip(sim: PoolSimulator, p: VirtualPosition, ts: number): boolean {
+    const f = p.spec.flip;
+    if (!f || p.reseeds >= f.maxFlips) return false;
+    const above = binsForUpPct(f.upPct, sim.meta.binStep);
+    if (!sim.reseed(p.id, ts, 0.99, { binsAbove: above, strategy: f.shape, blend: f.blend ?? undefined, reason: "yunus_flip" })) return false;
+    this.stats.yunus.flips++;
+    return true;
   }
 
   /** Out-of-range exit policies for one pool after its state update. */
@@ -625,7 +800,7 @@ export class GridRunner {
   private runtime(p: VirtualPosition): PosRuntime {
     let r = this.rt.get(p.id);
     if (!r) {
-      r = { trailing: newTrailing(), flowPending: null, feeHist: [], lastCompound: p.openedAt ?? 0 };
+      r = { trailing: newTrailing(), flowPending: null, feeHist: [], lastCompound: p.openedAt ?? 0, worstPct: 0 };
       this.rt.set(p.id, r);
     }
     return r;
@@ -647,6 +822,20 @@ export class GridRunner {
         // ---- variants (their costs land before the PnL check)
         const variant = p.spec.variant ?? "none";
         if (variant === "single_sided_reseed" && p.outOfRangeSince !== null) this.tryReseed(sim, p, ts);
+        if (p.spec.flip) {
+          if (p.outOfRangeSince !== null) this.tryFlip(sim, p, ts);
+          // after a flip the position sells the token on the way up; fully back in quote = cycle complete
+          if (p.reseeds > 0 && p.status === "active") {
+            const share = sim.xShare(p.id);
+            if (share !== null && share <= 0.01) {
+              sim.close(p.id, "cycle_complete", ts);
+              this.rt.delete(p.id);
+              this.stats.yunus.cycles++;
+              this.stats.pnlExits.cycle_complete = (this.stats.pnlExits.cycle_complete ?? 0) + 1;
+              continue;
+            }
+          }
+        }
         if (variant === "fee_compounding") {
           const fee = sim.valuation(p).feeUsd;
           if (fee > 0 && (fee >= vp.fee_compounding.min_fee_usd || ts - r.lastCompound >= vp.fee_compounding.every_minutes * 60_000)) {
@@ -674,7 +863,8 @@ export class GridRunner {
           if (first.t <= ts - winMs) feeRate = (((feeTotal - first.feeUsd) / cap) * 100) / ((ts - first.t) / 3_600_000);
         }
         const netPct = (v.netPnlUsd / cap) * 100;
-        const d = pnlDecision(pol, { t: ts, netPct, feePct: (feeTotal / cap) * 100, ageMinutes: (ts - p.openedAt) / 60_000, feePctPerHourWindow: feeRate }, r.trailing);
+        r.worstPct = Math.min(r.worstPct, netPct);
+        const d = pnlDecision(pol, { t: ts, netPct, feePct: (feeTotal / cap) * 100, ageMinutes: (ts - p.openedAt) / 60_000, feePctPerHourWindow: feeRate, worstPct: r.worstPct }, r.trailing);
         r.trailing = d.trailing;
         if (d.event) sim.logExitSignal(p.id, ts, { action: d.event, pnlPct: netPct, peakPct: d.trailing.peak, policy: pol.type });
         let reason = d.reason;

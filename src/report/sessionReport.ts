@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import type { Db } from "../db/index.ts";
 import { getSession } from "../db/repo.ts";
 import { realismMarkdown } from "../analysis/realism.ts";
+import { lpOutcomes, lpOutcomesMarkdown } from "../analysis/lpOutcomes.ts";
 import { portfolioReportMarkdown } from "../analysis/portfolio.ts";
 import { loadConfig } from "../config/load.ts";
 import { calibrationMarkdown, groupComparison, groupComparisonMarkdown, reconciliationMarkdown, safetyMemoryMarkdown, breakEvenMarkdown, entryFilterMarkdown, scoreCalibration, signalVsBaseline, signalVsBaselineMarkdown } from "./analytics.ts";
@@ -93,6 +94,11 @@ export function writeSessionReport(db: Db, simSessionId: string, outDir = "repor
     ["entry mode", "p.entry_mode"],
     ["strategy", "p.strategy"],
     ["bins per side", "CAST(json_extract(p.grid_combo,'$.bins_per_side') AS TEXT)"],
+    ["range width (downside price %)", "CASE WHEN json_extract(p.grid_combo,'$.range_down_pct') IS NULL THEN 'unknown' WHEN json_extract(p.grid_combo,'$.range_down_pct') = 0 THEN 'none (base-only)' WHEN json_extract(p.grid_combo,'$.range_down_pct') < 15 THEN '< 15%' WHEN json_extract(p.grid_combo,'$.range_down_pct') < 30 THEN '15-30%' WHEN json_extract(p.grid_combo,'$.range_down_pct') < 50 THEN '30-50%' WHEN json_extract(p.grid_combo,'$.range_down_pct') < 70 THEN '50-70%' WHEN json_extract(p.grid_combo,'$.range_down_pct') < 85 THEN '70-85%' ELSE '>= 85%' END"],
+    ["token age at entry", "CASE WHEN json_extract(p.grid_combo,'$.token_age_h') IS NULL THEN 'unknown' WHEN json_extract(p.grid_combo,'$.token_age_h') < 6 THEN '< 6 h' WHEN json_extract(p.grid_combo,'$.token_age_h') < 48 THEN '6-48 h' ELSE '>= 48 h' END"],
+    ["market cap at entry", "CASE WHEN json_extract(p.grid_combo,'$.mcap_usd') IS NULL THEN 'unknown' WHEN json_extract(p.grid_combo,'$.mcap_usd') < 1000000 THEN '< $1M' WHEN json_extract(p.grid_combo,'$.mcap_usd') < 5000000 THEN '$1-5M' ELSE '>= $5M' END"],
+    ["drawdown from ATH at entry", "CASE WHEN json_extract(p.grid_combo,'$.ath_drawdown_pct') IS NULL THEN 'unknown' WHEN json_extract(p.grid_combo,'$.ath_drawdown_pct') < 10 THEN '< 10% (near ATH)' WHEN json_extract(p.grid_combo,'$.ath_drawdown_pct') < 30 THEN '10-30%' WHEN json_extract(p.grid_combo,'$.ath_drawdown_pct') < 50 THEN '30-50%' WHEN json_extract(p.grid_combo,'$.ath_drawdown_pct') < 70 THEN '50-70%' ELSE '>= 70%' END"],
+    ["pool age at entry", "CASE WHEN json_extract(p.grid_combo,'$.pool_age_h') IS NULL THEN 'unknown' WHEN json_extract(p.grid_combo,'$.pool_age_h') < 6 THEN '< 6 h' WHEN json_extract(p.grid_combo,'$.pool_age_h') < 48 THEN '6-48 h' ELSE '>= 48 h' END"],
     ["sides", "p.sides"],
     ["exit policy", "json_extract(p.grid_combo,'$.exit_policy')"],
     ["exit policy type", "COALESCE(json_extract(p.exit_policy_params,'$.type'), substr(json_extract(p.grid_combo,'$.exit_policy'), 1, instr(json_extract(p.grid_combo,'$.exit_policy') || ':', ':') - 1))"],
@@ -211,6 +217,10 @@ export function writeSessionReport(db: Db, simSessionId: string, outDir = "repor
   md.push("## Real LP positions and simulator realism (addendum 4)");
   md.push("");
   md.push(realismMarkdown(db, dataSession));
+  md.push("");
+  md.push("### Real positions that opened during the session, followed to closure");
+  md.push("");
+  md.push(lpOutcomesMarkdown(lpOutcomes(db, { since: ds.start_at, until: ds.end_at ?? Date.now(), minDepositUsd: 20 })));
   md.push("");
   md.push("## Score calibration");
   md.push("");

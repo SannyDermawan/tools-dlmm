@@ -321,6 +321,7 @@ describe("noise-robust volume triggers", () => {
     const c = cfg();
     c.grid.strategies = ["spot"];
     c.grid.bins_per_side = [5];
+    c.grid.range_pct = [];
     c.grid.sides = ["two_sided"];
     c.grid.variants = ["none"];
     c.grid.entry_modes = ["all_pools_baseline"];

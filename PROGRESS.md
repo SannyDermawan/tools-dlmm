@@ -659,6 +659,57 @@ filters `key=value` / `key~prefix`, e.g. `exit_policy~scalp bins_per_side=34`) i
   meridian_preset) once they have 5 sequential trades.
 Tests: `test/eventEntry.test.ts` (7), `test/portfolio.test.ts` (9). 282 tests total.
 
+## Playbook revisions: Yunus / EvilPanda (2026-09-29, cloud) ✅
+Source: a summary of the public playbooks (tweets, unverified) analysed in the conversation; the
+implementation tests the claims, it does not assume them. Seven points, all done:
+1. **Range width in price %** (`grid.range_pct`, `wide_range.range_pct`): `binsForRangePct(pct, step)`
+   = ln(1-pct)/ln(1/(1+step)) — -50% is 70 bins at step 100 but 693 at step 10. Resolved per pool at the
+   open; a level that needs more than `max_bins_per_position` (1400) in a pool is skipped and counted
+   (`widthSkips`), never clipped. Defaults 30/50/70/90 (wide_range 50/70/90).
+2. **Coin-selection dimensions**: every position journals `range_down_pct`, `range_up_pct`, `pool_age_h`,
+   `token_age_h`, `mcap_usd` (Jupiter audit at the entry) and `ath_drawdown_pct`; the session report slices by all
+   of them (null = "unknown", never zero).
+3. **`yunus_flip` entry mode** (`presets/yunus.yaml`, `src/sim/yunus.ts`): bid-ask quote-only below the price
+   (widths 50/70 %, anchored to the price or to the ATH), held WITHOUT a stop loss until fully converted to the
+   token, then flipped base-only above the new price (`+up_pct`, up to `max_flips`) as a plain bid-ask or as a
+   **70:30 bid-ask : spot mix** (`RangeSpec.blend`, two SDK distributions summed per bin); closes as
+   `cycle_complete` when fully back in quote. Screen: pool category, risk token = base X, TVL, mint / freeze
+   authority, optional mcap / token age / ATH drawdown thresholds (off by default: the report slices by them).
+   One cycle at a time per pool and combination, re-entry after a cooldown (`reentry`). The exit policies of the
+   preset are grid levels too (break-even exit vs a plain time-cap hold as the control).
+4. **`breakeven_exit` policy**: after the net PnL has been <= -`min_underwater_pct` at some evaluation, close
+   as soon as it is back at `target_pct` (0 = break-even after costs); optional `tp_pct` / `sl_pct`; the
+   `time_cap_minutes` closes what is left (`time_cap`). Works in any grid, not only Yunus.
+5. **ATH** (`src/features/ath.ts`): daily candles back to the pool's start (`collectors.ohlcv.daily_lookback_days`
+   365; one pull per pool, the newest days again every 6 h) + 1h + 5m; `AthLookup` is look-ahead safe (closed
+   candles only) and cached per pool and 5 min. Checked on stored data: OHLCV close = on-chain price (ratio 1.000).
+   ATH is the highest high we can see (a lower bound for pools older than the lookback). The anchor: bottom of the
+   range = ATH x (1 - pct); skipped when the price is already below it or less than `min_downside_pct` is left.
+6. **Real LP outcomes without survivorship** (`dlmm lp outcomes`, `src/analysis/lpOutcomes.ts`, report section):
+   the cohort is every position that OPENED WHILE WE WATCHED (`new_in_scan = 1`), followed to closure. Time to
+   close is a Kaplan-Meier estimate on the sightings alone (right-censored at the last scan that saw the position,
+   independent of which wallets we queried); PnL is shown for closed positions and for all (open ones at their
+   mark) by sides / shape / width / hold time, with the open share next to every number. The wallet fetch queue
+   puts the cohort first and the budget went from 40 to 100 per scan. First look at real data (1,550 positions,
+   10 h): 44% still open after 1 h, median close 0.5 h, PnL known for only 38% (coverage is the limit); nothing
+   about long holds can be said before sessions run for days.
+7. **Long-session profile** (`config/session-3d.yaml`): 72 h (or `-d 1440`), reduced sampling, gap thresholds
+   scaled to the cadence. Credits, NOT YET MEASURED on a run of this
+   profile (to be filled in). Measured on the default profile (live session, 40 min, 14 pools): ~4,080 credits =
+   getTransaction 2,277 (swap stream) + getProgramAccounts 1,120 (real LP scans, 10 credits each) +
+   getMultipleAccounts 566 + ~90 other. Estimate for the 3-day profile (an estimate, not a measurement): swap stream
+   paced to its budget (20,000 / 72 h = ~280/h) + real LP scans (12 pools x 10 x 2/h = 240/h) + pool state / bins
+   (~270/h) + other (~100/h) = ~900/h, about 65,000 for 72 h (`session_credit_budget` 90,000).
+Tests: `test/rangePct.test.ts` (7), `test/yunus.test.ts` (19), `test/ohlcvDaily.test.ts` (5),
+`test/lpOutcomes.test.ts` (10), `test/profiles.test.ts` (5). 328 tests total.
+Replay check (`dlmm sim replay` on a copy of the DB, 45 min): 44 yunus_flip cycles on 3 memecoin pools; the first
+version also opened them in bluechip pairs and where the risk token is the quote side (found by this replay, now
+screened out). 45 minutes cannot finish a cycle: every position closed at the session end (censored).
+**What this does not prove**: whether the playbook works. It builds the instrument: one sequence of sessions of
+24-72 h will show cycles that complete, flips, and break-even exits; compare `yunus_flip` with the baseline on the
+same pools and cohorts (report: "group comparison", "pool-selection effect"), and use `dlmm portfolio -m yunus_flip`
+for the one-at-a-time account.
+
 ## RPC: Helius Free + swap stream redesign (2026-09-29)
 - `.env` points to Helius (Free: 1M credits/month, 10 rps). Rate limits: critical 3 rps +
   swap stream 5 rps + token security 0.75 rps.

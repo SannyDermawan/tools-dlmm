@@ -83,6 +83,7 @@ export const TIMEFRAME_SECONDS: Record<string, number> = {
 };
 /** The API rejects long ranges ("time range too large"; 5m: 6h ok, 12h not) — request <= 72 candles at a time. */
 export const OHLCV_MAX_CANDLES = 72;
+const DAILY_REFRESH_MS = 6 * 3_600_000;
 
 export async function fetchOhlcvChunked(api: MeteoraApi, pool: string, tf: string, startSec: number, endSec: number) {
   const step = TIMEFRAME_SECONDS[tf] * OHLCV_MAX_CANDLES;
@@ -97,13 +98,42 @@ export async function fetchOhlcvChunked(api: MeteoraApi, pool: string, tf: strin
 export class OhlcvCollector {
   static readonly SOURCE = "ohlcv";
   private warmed = new Set<string>();
+  /** last daily-candle pull per pool (ms): full history once, the newest days again every few hours */
+  private dailyAt = new Map<string, number>();
   constructor(private readonly d: ApiDeps) {}
+
+  /**
+   * Daily candles back to the pool's start (bounded by daily_lookback_days): the base of the ATH feature.
+   * Stored as timeframe '24h'. Closed days never change, so later pulls only refresh the last days.
+   */
+  async dailyHistory(pool: string, nowMs: number) {
+    const { d } = this;
+    const days = d.config.collectors.ohlcv.daily_lookback_days;
+    if (days <= 0) return;
+    const last = this.dailyAt.get(pool);
+    if (last !== undefined && nowMs - last < DAILY_REFRESH_MS) return;
+    const created = d.pools.get(pool)?.createdAt ?? null;
+    const full = last === undefined;
+    const from = full ? Math.max(nowMs - days * 86_400_000, created ? created - 86_400_000 : 0) : nowMs - 3 * 86_400_000;
+    try {
+      const pts = await fetchOhlcvChunked(d.api, pool, "24h", Math.floor(from / 1000), Math.floor(nowMs / 1000));
+      d.db.insertMany(
+        "ohlcv",
+        pts.map((p) => ({ pool, timeframe: "24h", ts: p.timestamp * 1000, o: p.open, h: p.high, l: p.low, c: p.close, v: p.volume, source: "meteora_api", fetched_at: nowMs })),
+        "OR REPLACE",
+      );
+      this.dailyAt.set(pool, nowMs);
+    } catch (e) {
+      d.log.warn({ pool, err: (e as Error).message }, "daily ohlcv fetch failed; ATH uses the shorter history");
+    }
+  }
 
   async tick() {
     const { d } = this;
     const c = d.config.collectors.ohlcv;
     const nowSec = Math.floor(Date.now() / 1000);
     for (const pool of d.pools.keys()) {
+      await this.dailyHistory(pool, nowSec * 1000);
       const start = this.warmed.has(pool) ? nowSec - c.refresh_lookback_minutes * 60 : nowSec - c.warmup_hours * 3600;
       let ok = true;
       for (const tf of c.timeframes) {

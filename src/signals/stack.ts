@@ -11,6 +11,7 @@ import { ExitEngine } from "./exitEngine.ts";
 import { tokenFlowLookup } from "../collectors/tokenFlow.ts";
 import { SignalBook } from "./signalEngine.ts";
 import { PoolMemory } from "../features/memory.ts";
+import { AthLookup } from "../features/ath.ts";
 import { RugDetector } from "../features/rugDetector.ts";
 import { auditLookup, type AuditRow } from "../features/safetyData.ts";
 
@@ -71,11 +72,26 @@ export function buildDecisionStack(
       return r?.supply_ui ? { riskIsX, supply: r.supply_ui } : null;
     },
   );
+  const athLookup = new AthLookup(db);
   const gridSignals: GridSignals = {
     book,
+    ath: (pool, t) => {
+      const m = metaOf.get(pool);
+      return m && !bluechip.has(m.tokenX) ? athLookup.at(pool, t) : null; // the pool price is that of the base token only when it is the risk token
+    },
     exitEngine,
     memory,
     indicators: scoring.indicators ?? undefined,
+    tokenInfo: (pool, t) => {
+      const m = metaOf.get(pool);
+      const token = m ? (bluechip.has(m.tokenX) ? (bluechip.has(m.tokenY) ? null : m.tokenY) : m.tokenX) : null;
+      const a = token && audit ? audit(token, t) : null;
+      const born = a ? (a.token_created_at ?? a.first_pool_at) : null;
+      return {
+        tokenAgeHours: born !== null && born !== undefined ? Math.max(0, (t - born) / 3_600_000) : null, mcapUsd: a?.mcap_usd ?? null,
+        riskIsBase: m ? !bluechip.has(m.tokenX) : undefined,
+      };
+    },
     expectedFeeUsd: (pool, valueUsd) => {
       const e = latestScore.get(pool)?.edge;
       if (!e) return null;

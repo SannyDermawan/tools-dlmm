@@ -264,6 +264,7 @@ describe("grid: pool cooldown dimension", () => {
     c.grid.entry_modes = ["all_pools_baseline", "signal_watch"];
     c.grid.strategies = ["spot"];
     c.grid.bins_per_side = [2];
+    c.grid.range_pct = [];
     c.grid.sides = ["two_sided"];
     c.grid.exit_policies = [{ type: "hold_to_session_end" }] as never;
     c.grid.variants = ["none"];

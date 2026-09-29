@@ -152,6 +152,7 @@ collectors:
     interval_seconds: 300
     warmup_hours: 24
     refresh_lookback_minutes: 30
+    daily_lookback_days: 365 # daily candles (24h) back to the pool's start: base of ath_drawdown_pct; 0 = off
   token_security:
     enabled: true
     interval_minutes: 60
@@ -270,6 +271,9 @@ session:
 grid:
   strategies: [spot, curve, bidask]
   bins_per_side: [5, 10, 20, 35, 50]
+  range_pct: [30, 50, 70, 90]      # width as the downside price move covered (%), converted to bins by each pool's bin step
+                                   # (69 bins = -50% at step 100, but -6.6% at step 10). A pool where the level needs more
+                                   # bins than one position holds (1400) skips it: -90% needs >= step 20
   sides: [two_sided, base_only, quote_only]
   exit_policies:
     - { type: hold_to_session_end }
@@ -291,13 +295,13 @@ grid:
     # one minute later (checked every 30 s)
     - { type: flow_trigger, sets: [volume_avg3] }
     - { type: flow_trigger, sets: [volume], confirm_seconds: 60 }
-  entry_modes: [all_pools_baseline, meridian_preset, friday_scalp, signal_enter, signal_watch]
+  entry_modes: [all_pools_baseline, meridian_preset, friday_scalp, yunus_flip, signal_enter, signal_watch]
   variants: [none, partial_harvest, fee_compounding, single_sided_reseed, wide_range]
   variant_params:
     partial_harvest: { trigger_return_pct: 10, fraction: 0.5 }     # withdraw 50% at +10% return
     fee_compounding: { min_fee_usd: 5, every_minutes: 30 }         # re-add fees when >= $5 or every 30 min
     single_sided_reseed: { max_reseeds: 3 }
-    wide_range: { bins_per_side: [69, 100, 150], strategy: spot }  # own widths; bins_per_side ignored
+    wide_range: { bins_per_side: [69, 100, 150], range_pct: [50, 70, 90], strategy: spot }  # own widths (price % when set)
   cooldown_enabled: [true, false] # signal modes run with and without pool cooldown (baseline: never)
   cooldown_min_session_minutes: 120 # shorter sessions: cooldown dimension off (4-12 h cooldowns cannot trigger)
   signal_entry:                 # when the signal modes (signal_enter / signal_watch) open positions
@@ -324,6 +328,7 @@ weights_profile: v1_default
 presets:
   meridian: presets/meridian.yaml   # second baseline (entry mode meridian_preset)
   friday: presets/friday.yaml       # Friday's scalp playbook (entry mode friday_scalp; stage 1 = partial)
+  yunus: presets/yunus.yaml         # Yunus / EvilPanda flip playbook (entry mode yunus_flip)
 
 memory:                          # pool / token memory across sessions (phase 10)
   cooldown:
@@ -405,7 +410,8 @@ real_lp:                         # real LP positions of other wallets (phase 11)
   enabled: true
   scan_minutes: 5                # on-chain scan of open positions per pool (getProgramAccounts by lb_pair, ~10 credits
                                  # per pool): frequent scans catch more positions while open (shape = realism)
-  max_wallet_queries_per_scan: 40   # Meteora Data API /positions/{pool}/pnl calls per scan (all pools)
+  max_wallet_queries_per_scan: 100  # Meteora Data API /positions/{pool}/pnl calls per scan (all pools; ~3 rps, no RPC credits); positions
+                                 # that opened while we watched come first (dlmm lp outcomes needs their PnL)
   max_pages_per_wallet: 3        # 100 positions per page
   refetch_hours: 6               # re-query a (wallet, pool) at most this often (closed ones get priority)
   fetch_events: true             # /positions/{address}/historical for positions closed in our data window

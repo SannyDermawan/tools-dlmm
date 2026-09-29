@@ -28,6 +28,7 @@ export type ScalarExitPolicy =
     }
   | { type: "low_yield_exit"; min_fee_pct_per_hour: number; window_minutes: number; min_age_minutes: number }
   | { type: "time_stop"; minutes: number }
+  | { type: "breakeven_exit"; min_underwater_pct: number; target_pct: number; time_cap_minutes: number; tp_pct?: number; sl_pct?: number }
   | { type: "scalp"; time_stop_minutes: number; oor_minutes: number; sl_pct?: number; flow?: FlowExit }
   | ({ type: "flow_trigger"; set: string; time_stop_minutes?: number } & FlowExit);
 
@@ -52,6 +53,11 @@ export function expandExitPolicies(policies: ExitPolicy[]): ScalarExitPolicy[] {
         break;
       case "time_stop":
         for (const minutes of list(p.minutes)) out.push({ type: "time_stop", minutes });
+        break;
+      case "breakeven_exit":
+        for (const uw of list(p.min_underwater_pct))
+          for (const cap of list(p.time_cap_minutes))
+            out.push({ type: "breakeven_exit", min_underwater_pct: uw, target_pct: p.target_pct, time_cap_minutes: cap, ...(p.tp_pct ? { tp_pct: p.tp_pct } : {}), ...(p.sl_pct ? { sl_pct: p.sl_pct } : {}) });
         break;
       case "flow_trigger": {
         const { sets, type: _t, ...rest } = p;
@@ -98,6 +104,8 @@ export function exitPolicyLabel(e: ScalarExitPolicy): string {
       return `low_yield_exit:${e.min_fee_pct_per_hour}%/h:${e.window_minutes}m`;
     case "time_stop":
       return `time_stop:${e.minutes}m`;
+    case "breakeven_exit":
+      return `breakeven:uw${e.min_underwater_pct}%:cap${e.time_cap_minutes}m${e.target_pct ? `:t${e.target_pct}%` : ""}${e.tp_pct ? `:tp${e.tp_pct}` : ""}${e.sl_pct ? `:sl${e.sl_pct}` : ""}`;
     case "scalp":
       return `scalp:ts${e.time_stop_minutes}m:oor${e.oor_minutes}m${e.sl_pct ? `:sl${e.sl_pct}` : ""}${e.flow ? `:flow${e.flow.triggers.length === 4 ? "4" : `(${e.flow.triggers.join("+")})`}` : ""}`;
     case "flow_trigger":
@@ -190,6 +198,8 @@ export interface PnlSnapshot {
   ageMinutes: number;
   /** fee % of capital earned per hour over the low-yield window, when the window is covered */
   feePctPerHourWindow: number | null;
+  /** lowest net PnL % seen since the open (breakeven_exit: "was under water") */
+  worstPct?: number;
 }
 
 /**
@@ -224,6 +234,14 @@ export function pnlDecision(
     }
     case "time_stop":
       return { reason: x.ageMinutes >= e.minutes ? "time_stop" : null, trailing };
+    case "breakeven_exit": {
+      // The playbook exit: sit through the drawdown, leave when the position is back at break-even.
+      // Optional TP / SL; the time cap closes whatever is left.
+      if (e.sl_pct !== undefined && x.netPct <= -e.sl_pct) return { reason: "stop_loss", trailing };
+      if (e.tp_pct !== undefined && x.netPct >= e.tp_pct) return { reason: "take_profit", trailing };
+      if ((x.worstPct ?? x.netPct) <= -e.min_underwater_pct && x.netPct >= e.target_pct) return { reason: "breakeven", trailing };
+      return { reason: x.ageMinutes >= e.time_cap_minutes ? "time_cap" : null, trailing };
+    }
     case "scalp":
       if (e.sl_pct !== undefined && x.netPct <= -e.sl_pct) return { reason: "stop_loss", trailing };
       return { reason: x.ageMinutes >= e.time_stop_minutes ? "time_stop" : null, trailing };
@@ -240,7 +258,7 @@ export function pnlDecision(
 }
 
 export const isPnlPolicy = (e: ScalarExitPolicy) =>
-  ["take_profit", "stop_loss", "trailing_tp", "tp_sl_combo", "low_yield_exit", "time_stop", "scalp", "flow_trigger"].includes(e.type);
+  ["take_profit", "stop_loss", "trailing_tp", "tp_sl_combo", "low_yield_exit", "time_stop", "breakeven_exit", "scalp", "flow_trigger"].includes(e.type);
 
 /** Flow exit of a policy, if any. */
 export const flowExitOf = (e: ScalarExitPolicy): FlowExit | null =>

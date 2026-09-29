@@ -1,0 +1,45 @@
+# Yunus (@0xyunss) / EvilPanda flip playbook, as entry mode yunus_flip.
+#
+# Source: public summaries of the playbooks (tweets, unverified). What we simulate:
+#   1. enter with a bid-ask, quote-only position below the price (downside -30 / -50 / -70 / -90 %),
+#   2. hold, no stop loss, until the whole position is converted to the token (price fell through it),
+#   3. flip: redeploy base-only above the new price (an "ask" that sells the token back on the way up),
+#      as a bid-ask only or as a 70:30 bid-ask : spot mix,
+#   4. leave when the cycle completes (fully back in quote) or when the position is back at break-even
+#      after having been under water; a time cap closes whatever is left.
+# Every knob below is a grid level: the report compares them on identical pools and cohorts.
+
+screen:                          # pool / token screen; null = not applied (the report slices by these instead)
+  categories: [memecoin]         # bluechip pairs have nothing to flip (empty list = every category)
+  require_risk_token_base: true  # the risk token must be the base token X: the flip sells it on the way up
+  min_tvl_usd: 10000
+  min_mcap_usd: null             # the playbook says >= $5M; off so that the report shows the effect
+  min_token_age_hours: null
+  max_token_age_hours: null
+  min_ath_drawdown_pct: null     # e.g. 30 = only tokens already 30 % below their ATH
+  max_ath_drawdown_pct: null
+  fail_on_mint_authority: true
+  fail_on_freeze_authority: true
+  missing_security: skip         # skip | allow when the security row is missing
+
+entry:
+  shape: bidask                  # the initial position (quote-only)
+  range_pct: [50, 70]            # downside of the range, price %  (-50 % = 70 bins at bin step 100)
+  anchor: [price, ath]           # measured from the entry price, or from the ATH (bottom = ATH x (1 - pct))
+  min_downside_pct: 10           # ath anchor: skip when less than this is left below the price
+
+flip:
+  up_pct: 100                    # the flip range covers +100 % above the new price
+  max_flips: 2                   # re-flip after a further fall (only while fully in the token)
+  shapes:                        # one grid level each
+    - { name: bidask, shape: bidask }
+    - { name: mix_70_30, shape: bidask, blend: { strategy: spot, share: 0.3 } }   # 70 % bid-ask + 30 % spot
+
+exit:                            # any exit policy of the grid; the flip cycle ends by itself when fully back in quote
+  policies:
+    - { type: breakeven_exit, min_underwater_pct: 5, target_pct: 0, time_cap_minutes: 1440 }
+    - { type: time_stop, minutes: 1440 }   # control: plain hold with the same cap
+
+reentry:
+  cooldown_minutes: 30           # a new cycle in the same pool and combination after the previous one closed
+  max_cycles_per_pool: 2
