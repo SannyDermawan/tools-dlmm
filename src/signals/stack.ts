@@ -76,6 +76,13 @@ export function buildDecisionStack(
     exitEngine,
     memory,
     indicators: scoring.indicators ?? undefined,
+    tokenInfo: (pool, t) => {
+      const m = metaOf.get(pool);
+      const token = m ? (bluechip.has(m.tokenX) ? (bluechip.has(m.tokenY) ? null : m.tokenY) : m.tokenX) : null;
+      const a = token && audit ? audit(token, t) : null;
+      const born = a ? (a.token_created_at ?? a.first_pool_at) : null;
+      return { tokenAgeHours: born !== null && born !== undefined ? Math.max(0, (t - born) / 3_600_000) : null, mcapUsd: a?.mcap_usd ?? null };
+    },
     expectedFeeUsd: (pool, valueUsd) => {
       const e = latestScore.get(pool)?.edge;
       if (!e) return null;

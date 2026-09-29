@@ -49,7 +49,7 @@ describe("grid", () => {
     c.grid.variants = ["none"];
     const combos = gridCombos(c);
     const g = c.grid;
-    expect(combos).toHaveLength(g.strategies.length * g.bins_per_side.length * g.sides.length * expandExitPolicies(g.exit_policies).length);
+    expect(combos).toHaveLength(g.strategies.length * (g.bins_per_side.length + g.range_pct.length) * g.sides.length * expandExitPolicies(g.exit_policies).length);
     expect(new Set(combos.map((x) => x.entryMode))).toEqual(new Set(["all_pools_baseline"]));
     // signal modes join with the decision stack; meridian_preset is not a grid mode
     // signal modes run once per cooldown setting (phase 10: with and without the pool cooldown)
@@ -79,6 +79,7 @@ describe("GridRunner", () => {
     const c = cfg();
     c.grid.strategies = ["spot"];
     c.grid.bins_per_side = [2];
+    c.grid.range_pct = [];
     c.grid.sides = ["two_sided"];
     c.grid.variants = ["none"];
     c.grid.sampling.mode = "full";
@@ -192,6 +193,7 @@ describe("session report", () => {
     const c = cfg();
     c.grid.strategies = ["spot", "curve"];
     c.grid.bins_per_side = [2];
+    c.grid.range_pct = [];
     const sink = new DbSimSink(db, sid, v);
     const sim = new PoolSimulator(META, c, sink);
     sim.onMarket({ quoteUsd: 1, solUsd: 100, priorityMicroLamports: 0 });

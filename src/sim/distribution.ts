@@ -114,3 +114,18 @@ export function xValueFraction(r: RangeSpec, setting: "auto" | number): number {
   const ask = favorX ? maxDelta + 1 : maxDelta;
   return ask / total;
 }
+
+/**
+ * Bins that cover a downside price move of `pct` % at a bin step (bps): price falls by (1+step)^-n,
+ * so n = ln(1 - pct/100) / ln(1/(1+step)). 70 bins are -50% at step 100 but only -6.8% at step 10.
+ */
+export function binsForRangePct(pct: number, binStep: number): number {
+  const n = Math.round(-Math.log(1 - pct / 100) / Math.log(1 + binStep / 10_000));
+  return Math.max(1, n);
+}
+
+/** Downside price move (%) covered by `bins` bins at a bin step. */
+export const downsidePct = (bins: number, binStep: number) => (bins <= 0 ? 0 : 100 * (1 - Math.pow(1 + binStep / 10_000, -bins)));
+
+/** Upside price move (%) covered by `bins` bins at a bin step. */
+export const upsidePct = (bins: number, binStep: number) => (bins <= 0 ? 0 : 100 * (Math.pow(1 + binStep / 10_000, bins) - 1));

@@ -43,6 +43,7 @@ const setup = (o: { trigger: "cohort" | "event" | "both"; mut?: (c: Config) => v
   const c = structuredClone(loadConfig().config);
   c.grid.strategies = ["spot"];
   c.grid.bins_per_side = [2];
+  c.grid.range_pct = [];
   c.grid.sides = ["two_sided"];
   c.grid.exit_policies = [{ type: "hold_to_session_end" }];
   c.grid.variants = ["none"];

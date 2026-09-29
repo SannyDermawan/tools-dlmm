@@ -419,6 +419,10 @@ export const ConfigSchema = z
       .object({
         strategies: z.array(z.enum(STRATEGIES)).min(1),
         bins_per_side: z.array(z.number().int().min(0)).min(1),
+        // range width as the price move covered downwards (%), converted to bins per pool by its bin step;
+        // added to the width levels of bins_per_side (a pool where the level needs more bins than a position
+        // can hold skips that level)
+        range_pct: z.array(z.number().gt(0).lt(100)).default([]),
         sides: z.array(z.enum(SIDES)).min(1),
         exit_policies: z.array(exitPolicy).min(1),
         entry_modes: z.array(z.enum(ENTRY_MODES)).min(1),
@@ -428,7 +432,13 @@ export const ConfigSchema = z
             partial_harvest: z.object({ trigger_return_pct: pos, fraction: frac }).strict(),
             fee_compounding: z.object({ min_fee_usd: pos, every_minutes: pos }).strict(),
             single_sided_reseed: z.object({ max_reseeds: z.number().int().min(1) }).strict(),
-            wide_range: z.object({ bins_per_side: z.array(z.number().int().min(1)).min(1), strategy: z.enum(STRATEGIES) }).strict(),
+            wide_range: z
+              .object({
+                bins_per_side: z.array(z.number().int().min(1)).min(1),
+                range_pct: z.array(z.number().gt(0).lt(100)).default([]), // when set: widths in price % (bins_per_side is ignored)
+                strategy: z.enum(STRATEGIES),
+              })
+              .strict(),
           })
           .strict(),
         sampling: z

@@ -167,7 +167,8 @@ describe("balanced grid sampling", () => {
     expect(combos.filter((x) => x.entryMode === "all_pools_baseline").every((x) => x.cooldownEnabled === null)).toBe(true);
     const wide = combos.filter((x) => x.variant === "wide_range");
     expect(wide.length).toBeGreaterThan(0);
-    expect(wide.every((x) => x.strategy === "spot" && [69, 100, 150].includes(x.combo.bins_per_side as number))).toBe(true);
+    // wide_range widths are price-% levels (resolved to bins per pool), or fixed bins when range_pct is empty
+    expect(wide.every((x) => x.strategy === "spot" && [50, 70, 90].includes(x.combo.range_pct as number))).toBe(true);
     expect(new Set(combos.map((x) => x.variant))).toEqual(new Set(c.grid.variants));
   });
 
@@ -261,6 +262,7 @@ describe("strategy variants (addendum 2.2)", () => {
     const c = cfg();
     c.grid.strategies = ["spot"];
     c.grid.bins_per_side = [2];
+    c.grid.range_pct = [];
     c.grid.sides = ["two_sided"];
     c.grid.exit_policies = [{ type: "hold_to_session_end" }];
     c.grid.variants = ["partial_harvest", "single_sided_reseed"];
@@ -303,6 +305,7 @@ describe("GridRunner PnL exit policies", () => {
     const c = cfg();
     c.grid.strategies = ["spot"];
     c.grid.bins_per_side = [2];
+    c.grid.range_pct = [];
     c.grid.sides = ["two_sided"];
     c.grid.exit_policies = policies;
     c.grid.variants = ["none"];
@@ -385,6 +388,7 @@ describe("Meridian preset (addendum 2.3)", () => {
     const c = cfg();
     c.grid.strategies = ["spot"];
     c.grid.bins_per_side = [2];
+    c.grid.range_pct = [];
     c.grid.sides = ["two_sided"];
     c.grid.exit_policies = [{ type: "hold_to_session_end" }];
     c.grid.variants = ["none"];

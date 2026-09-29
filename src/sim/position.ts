@@ -19,6 +19,8 @@ export interface PositionSpec {
   variant?: Variant;
   cohort?: number;
   signalId?: string | null;
+  /** width as the downside price move covered (%): resolved to bins per pool from its bin step at the open */
+  rangePct?: number;
   /** phase 10: skip pools in cooldown (signal modes; null = not applicable) */
   cooldownEnabled?: boolean | null;
   /** phase 13: indicator entry filter (none when absent) */

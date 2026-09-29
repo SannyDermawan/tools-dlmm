@@ -8,6 +8,7 @@ import { FRIDAY_CONFIRM, flowConfirm, flowTriggers, netBuyUsd, type FlowSnapshot
 import { expandExitPolicies, exitPolicyLabel, flowExitOf, isPnlPolicy, newTrailing, oorRule, pnlDecision, type TrailingState } from "./policies.ts";
 import type { SignalBook } from "../signals/signalEngine.ts";
 import type { ExitEngine } from "../signals/exitEngine.ts";
+import { binsForRangePct, downsidePct, upsidePct } from "./distribution.ts";
 import { entryFilterPass, type EntryFilter, type TfSnapshot } from "../features/indicators.ts";
 
 export type SessionPhase = "warmup" | "active" | "closing" | "ended";
@@ -68,6 +69,8 @@ const PRESET_MODES = new Set(["meridian_preset", "friday_scalp"]);
 const COOLDOWN_MODES = new Set(["signal_enter", "signal_watch"]);
 
 /** Deterministic PRNG (mulberry32) for reproducible grid samples. */
+const round = (v: number, d: number) => Math.round(v * 10 ** d) / 10 ** d;
+
 export function rng(seed: number): () => number {
   let a = seed >>> 0;
   return () => {
@@ -128,7 +131,9 @@ export function gridCombos(c: Config, opts: { allowSignalModes?: boolean; sessio
   const g = c.grid;
   const policies = expandExitPolicies(g.exit_policies);
   const filters = g.entry_filter;
-  const dims = [g.strategies.length, g.bins_per_side.length, g.sides.length, policies.length, g.variants.length, filters.length];
+  // width levels: fixed bin counts, then price-% levels (resolved to bins per pool at the open)
+  const widths: { bins?: number; pct?: number }[] = [...g.bins_per_side.map((bins) => ({ bins })), ...g.range_pct.map((pct) => ({ pct }))];
+  const dims = [g.strategies.length, widths.length, g.sides.length, policies.length, g.variants.length, filters.length];
   const sample = g.sampling.mode === "full" ? balancedSample(dims, Number.MAX_SAFE_INTEGER, 0) : balancedSample(dims, g.sampling.max_combos, g.sampling.seed);
   const wide = g.variant_params.wide_range;
   const modes = g.entry_modes.filter((m) => !PRESET_MODES.has(m) && (opts.allowSignalModes || !SIGNAL_MODES.has(m)));
@@ -145,16 +150,20 @@ export function gridCombos(c: Config, opts: { allowSignalModes?: boolean; sessio
       const variant = g.variants[vi];
       const isWide = variant === "wide_range";
       const strategy = isWide ? wide.strategy : g.strategies[si];
-      const n = isWide ? wide.bins_per_side[bi % wide.bins_per_side.length] : g.bins_per_side[bi];
+      const w: { bins?: number; pct?: number } = isWide
+        ? wide.range_pct.length ? { pct: wide.range_pct[bi % wide.range_pct.length] } : { bins: wide.bins_per_side[bi % wide.bins_per_side.length] }
+        : widths[bi];
+      const n = w.bins ?? 0; // price-% widths get their bins per pool when the position is requested
       const sides = g.sides[di];
       const exitPolicy = policies[pi];
       out.push({
         strategy, sides, exitPolicy, entryMode, variant, cooldownEnabled, entryFilter,
+        ...(w.pct !== undefined ? { rangePct: w.pct } : {}),
         binsBelow: sides === "base_only" ? 0 : n,
         binsAbove: sides === "quote_only" ? 0 : n,
         capitalUsd: c.simulation.virtual_capital_usd,
         combo: {
-          entry_mode: entryMode, strategy, bins_per_side: n, sides, exit_policy: exitPolicyLabel(exitPolicy), variant,
+          entry_mode: entryMode, strategy, ...(w.pct !== undefined ? { range_pct: w.pct } : { bins_per_side: n }), sides, exit_policy: exitPolicyLabel(exitPolicy), variant,
           sampling: g.sampling.mode,
           entry_filter: entryFilter,
           ...(cooldownEnabled !== null ? { cooldown: cooldownEnabled } : {}),
@@ -196,6 +205,8 @@ export interface GridStats {
   deferredEntries: number;
   /** positions not opened because their indicator entry filter did not pass, by filter and reason (phase 13) */
   filterSkips: Record<string, number>;
+  /** grid positions not opened because a price-% width needed more bins than a position holds in that pool */
+  widthSkips: number;
   /** event entries of the signal modes (grid.signal_entry): rising edges seen, entries made, what stopped the rest */
   events: { detected: number; opened: number; skipped: Record<string, number> };
   capped: boolean;
@@ -215,6 +226,8 @@ export interface GridSignals {
   indicators?: { at(pool: string, t: number): Record<string, TfSnapshot> | null };
   /** preset override (tests); default: loaded from config presets.meridian */
   preset?: MeridianPreset;
+  /** risk token facts at t for the journal (coin selection dimensions in the report) */
+  tokenInfo?: (pool: string, t: number) => { tokenAgeHours: number | null; mcapUsd: number | null } | null;
   /** one-minute flow of a pool at t (flow exits, Friday entry confirmation) */
   flow?: (pool: string, t: number) => FlowSnapshot | null;
   /** Friday screen inputs of a pool at t (entry mode friday_scalp) */
@@ -258,7 +271,7 @@ export class GridRunner {
   readonly stats: GridStats = {
     cohorts: 0, requested: 0, skippedPools: 0, rebalances: 0, policyExits: 0, rebalanceNotWorth: 0, signalEntries: {}, pnlExits: {},
     variantActions: { partial_harvest: 0, fee_compounding: 0, single_sided_reseed: 0 },
-    preset: { evaluated: 0, passed: 0, opened: 0, partial: 0 }, friday: { evaluated: 0, opened: 0, reentries: 0, failed: {} }, cooldownSkips: 0, filterSkips: {}, deferredEntries: 0, events: { detected: 0, opened: 0, skipped: {} }, capped: false,
+    preset: { evaluated: 0, passed: 0, opened: 0, partial: 0 }, friday: { evaluated: 0, opened: 0, reentries: 0, failed: {} }, cooldownSkips: 0, filterSkips: {}, deferredEntries: 0, widthSkips: 0, events: { detected: 0, opened: 0, skipped: {} }, capped: false,
   };
   /** latest signal action per pool at the previous scoring round (rising-edge detection) */
   private readonly lastAction = new Map<string, string | null>();
@@ -382,6 +395,37 @@ export class GridRunner {
     if (this.cohort > 0 && !this.deferred.has(pool)) this.deferred.set(pool, this.cohort);
   }
 
+  /**
+   * Bins of a price-% width for this pool (grid range_pct): n = ln(1-pct) / ln(1/(1+step)); null when
+   * that needs more bins than one position holds. Fixed-bin widths pass through unchanged.
+   */
+  private resolveWidth(sim: PoolSimulator, spec: PositionSpec): PositionSpec | null {
+    if (spec.rangePct === undefined) return spec;
+    const n = binsForRangePct(spec.rangePct, sim.meta.binStep);
+    const below = spec.sides === "base_only" ? 0 : n;
+    const above = spec.sides === "quote_only" ? 0 : n;
+    if (below + above + 1 > this.c.simulation.max_bins_per_position) return null;
+    return { ...spec, binsBelow: below, binsAbove: above, combo: { ...spec.combo, bins_per_side: n } };
+  }
+
+  /**
+   * Every position goes through here: journals what the report slices by (width in price %, token
+   * age, market cap, pool age at the entry) and requests it from the pool's simulator.
+   */
+  private requestPos(sim: PoolSimulator, spec: PositionSpec, ts: number) {
+    const m = sim.meta;
+    const ti = this.signals?.tokenInfo?.(m.pool, ts) ?? null;
+    const combo = {
+      ...spec.combo,
+      range_down_pct: round(downsidePct(spec.binsBelow, m.binStep), 2),
+      range_up_pct: round(upsidePct(spec.binsAbove, m.binStep), 2),
+      pool_age_h: m.createdAt ? round((ts - m.createdAt) / 3_600_000, 2) : null,
+      token_age_h: ti?.tokenAgeHours != null ? round(ti.tokenAgeHours, 2) : null,
+      mcap_usd: ti?.mcapUsd != null ? Math.round(ti.mcapUsd) : null,
+    };
+    return sim.request({ ...spec, combo }, ts);
+  }
+
   /** Open the grid of one pool for a cohort. Returns true when grid.max_positions was reached. */
   private openPool(sim: PoolSimulator, ts: number, cohortNo: number, event?: { modes: Set<string> }): boolean {
     this.lastOpened = 0;
@@ -427,15 +471,21 @@ export class GridRunner {
           this.lastOpened = opened;
           return true;
         }
-        const matches = !!rec && rec.strategy === spec.strategy && rec.sides === spec.sides &&
-          rec.bins_below === spec.binsBelow && rec.bins_above === spec.binsAbove;
-        sim.request(
+        const resolved = this.resolveWidth(sim, spec);
+        if (!resolved) {
+          this.stats.widthSkips++; // a price-% width that needs more bins than one position can hold in this pool
+          continue;
+        }
+        const matches = !!rec && rec.strategy === resolved.strategy && rec.sides === resolved.sides &&
+          rec.bins_below === resolved.binsBelow && rec.bins_above === resolved.binsAbove;
+        this.requestPos(
+          sim,
           {
-            ...spec,
+            ...resolved,
             cohort: cohortNo,
             signalId: sig?.signal_id ?? null,
             combo: {
-              ...spec.combo, cohort: cohortNo, signal_action: sig?.action ?? null, signal_score: sig?.final_score ?? null,
+              ...resolved.combo, cohort: cohortNo, signal_action: sig?.action ?? null, signal_score: sig?.final_score ?? null,
               matches_recommendation: matches, ...(signalMode ? { entry_trigger: trigger } : {}),
             },
           },
@@ -484,7 +534,8 @@ export class GridRunner {
       const binsBelow = s.sides === "base_only" ? 0 : s.bins_below;
       const binsAbove = s.sides === "two_sided" ? s.bins_below : 0;
       const partial = ev.missing.length > 0;
-      sim.request(
+      this.requestPos(
+        sim,
         {
           strategy: s.shape, sides: s.sides, binsBelow, binsAbove, exitPolicy, variant: "none",
           entryMode: "meridian_preset", capitalUsd: this.c.simulation.virtual_capital_usd,
@@ -551,7 +602,8 @@ export class GridRunner {
       const exitPolicy = fridayExitPolicy(pr);
       const sig = this.signals?.book.latestFor(sim.meta.pool, ts) ?? null;
       const n = (prev?.n ?? 0) + 1;
-      const p = sim.request(
+      const p = this.requestPos(
+        sim,
         {
           strategy: s.shape, sides: s.sides, exitPolicy, variant: "none", entryMode: "friday_scalp",
           binsBelow: s.sides === "base_only" ? 0 : s.bins_per_side, binsAbove: s.sides === "quote_only" ? 0 : s.bins_per_side,
