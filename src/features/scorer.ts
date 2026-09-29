@@ -52,7 +52,7 @@ const SPEC = new Map(FEATURE_SPECS.map((f) => [f.name, f]));
 const NO_SOURCE_YET = new Set<string>();
 /** Phase 10 features that are optional sources (Jupiter audit, pool memory): never lower confidence. */
 const INDICATOR_FEATURES = ["5m", "15m"].flatMap((tf) => [`rsi_${tf}`, `bb_pctb_${tf}`, `supertrend_dir_${tf}`, `supertrend_age_${tf}`, `fib_pos_${tf}`]);
-const OPTIONAL_FEATURES = new Set([...INDICATOR_FEATURES, "llm_social_score", "llm_narrative_score", "smart_lp_present", "smart_lp_count", "organic_score", "bot_holders_pct", "pvp_rival_count", "token_age_hours", "pool_hist_net_pct", "pool_hist_win_rate", "requires_bin_array_init"]);
+const OPTIONAL_FEATURES = new Set([...INDICATOR_FEATURES, "llm_social_score", "smart_lp_present", "smart_lp_count", "organic_score", "bot_holders_pct", "pvp_rival_count", "token_age_hours", "pool_hist_net_pct", "pool_hist_win_rate", "requires_bin_array_init"]);
 /** Flow features (blueprint 8.2 core + P1 extensions). */
 export const FLOW_FEATURES = ["trader_diversity", "top5_wallet_share", "markout_60s", "buy_sell_balance", "markout_30s", "markout_300s", "wash_share", "whale_share"];
 const val = (f: RawFeatures, k: string) => f.get(k)?.raw ?? null;
@@ -226,7 +226,7 @@ export class Scorer {
       modules.competition = mean(["lp_crowding", "bot_rebalance_freq", "pool_volume_share", "smart_lp_present"].map((k) => n.get(k)), 1);
       // attention proxies (P1-P2): only weighted when scoring.modules.attention is on
       const useLlm = c.llm.use_in_scoring;
-      modules.attention = mean(["trending_score", "boosts_active", "social_presence", "launchpad_heat", ...(useLlm ? ["llm_narrative_score"] : [])].map((k) => n.get(k)), 2);
+      modules.attention = mean(["trending_score", "boosts_active", "social_presence", "launchpad_heat"].map((k) => n.get(k)), 2);
       const secRows = this.riskTokens(m).map((tk) => this.d.security(tk, t));
       const g = sc.safety_gate;
       if (m.category === "bluechip") modules.safety = 100;

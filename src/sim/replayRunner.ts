@@ -63,6 +63,9 @@ export function dispatch(e: ReplayEvent, sims: Map<string, PoolSimulator>, runne
     case "swap":
       sims.get(e.s.pool)?.onSwap(e.s);
       break;
+    case "swapquote":
+      sims.get(e.pool)?.onMarket({ swapCostPct: e.costPct, swapQuoteTs: e.ts });
+      break;
   }
   runner?.onTick(e.ts);
 }

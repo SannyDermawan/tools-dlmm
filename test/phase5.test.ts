@@ -170,8 +170,8 @@ describe("grid runner with signals", () => {
     expect(a.spec.combo.signal_action).toBe("MASUK");
     expect(a.spec.combo.matches_recommendation).toBe(true);
     expect(by("all_pools_baseline").find((p) => p.pool === "C")!.spec.combo.signal_action).toBe("LEWATI");
-    // x2: signal modes run with and without the pool cooldown (grid.cooldown_enabled)
-    expect(runner.stats.signalEntries).toEqual({ signal_enter: 4, signal_watch: 4 });
+    // the test session is shorter than grid.cooldown_min_session_minutes: no cooldown dimension
+    expect(runner.stats.signalEntries).toEqual({ signal_enter: 2, signal_watch: 2 });
   });
 
   it("exit_engine positions skip a rebalance that costs more than the expected fee", () => {

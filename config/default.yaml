@@ -64,6 +64,8 @@ api:
   jupiter:                     # token audit (phase 10), verified 2026-09-29
     tokens_base_url: https://lite-api.jup.ag/tokens/v2        # official Tokens API V2, keyless host
     keyed_tokens_base_url: https://api.jup.ag/tokens/v2       # used when JUPITER_API_KEY is set in .env
+    swap_base_url: https://lite-api.jup.ag/swap/v1            # quotes for the aggregator swap cost (verified 2026-09-29)
+    keyed_swap_base_url: https://api.jup.ag/swap/v1
     datapi_base_url: https://datapi.jup.ag/v1                 # UNOFFICIAL (jup.ag web app): bot holders,
     use_datapi: true                                          # bundlers, fees; may change without notice
     max_rps: 0.5
@@ -200,7 +202,13 @@ simulation:
     priority_fee_percentile: 75
     priority_fee_floor_micro_lamports: 10000
     tx_failure_rate: 0.05          # failed tx still pays base + priority fee
-    slippage_margin_pct: 0.3       # added on top of pool fee for balancing swaps
+    slippage_margin_pct: 0.1       # added on top of the swap cost (quote -> execution drift)
+    swap_model: aggregator         # aggregator: Jupiter round-trip quotes (how real LPs swap); pool: the DLMM pool fee
+    aggregator:
+      quote_notional_usd: 500      # typical balancing swap of a $1000 position
+      quote_interval_minutes: 5
+      fallback_cost_pct: 0.5       # no fresh quote yet: this, capped by the pool fee
+      max_quote_age_minutes: 30
     # Rent (lamports) — from @meteora-ag/dlmm constants; verify on SDK upgrades.
     position_base_rent_sol: 0.05740608   # POSITION_FEE, 70-bin position
     position_default_bins: 70
@@ -244,11 +252,13 @@ grid:
     single_sided_reseed: { max_reseeds: 3 }
     wide_range: { bins_per_side: [69, 100, 150], strategy: spot }  # own widths; bins_per_side ignored
   cooldown_enabled: [true, false] # signal modes run with and without pool cooldown (baseline: never)
-  entry_filter: [none, supertrend_break, rsi_reversal, bollinger_reversion]  # indicator entry filters (phase 13);
-                                # a dimension of the balanced sample: each combination gets one filter
+  cooldown_min_session_minutes: 120 # shorter sessions: cooldown dimension off (4-12 h cooldowns cannot trigger)
+  entry_filter: [none]          # indicator entry filters (phase 13), on hold until sessions carry enough
+                                # candles: [none, supertrend_break, rsi_reversal, bollinger_reversion]
   sampling:                     # the full grid is huge: balanced random sample of combinations,
     mode: balanced              # every level of every dimension appears ~equally; the same sample
     max_combos: 180             # is used for every pool and entry mode (paired comparisons)
+    baseline_max_combos: 90     # the baseline uses the first 90 of the same sample (lighter laptop load)
     seed: 42
   cohort_interval_minutes: 60   # open a new cohort of the whole grid every N minutes of the active
                                 # phase (0 = one cohort at the start of the active phase)
@@ -301,7 +311,7 @@ llm:                             # conditional LLM layer (phase 13.2): features 
     min_clean_sessions: 10       # finished live sessions since `since` ...
     since: "2026-09-29"
     max_gap_minutes: 5           # ... with no pool_state / bin_snapshot gap longer than this
-  roles: { token_social: true, narrative: true, explainer: true }
+  roles: { token_social: true, explainer: true }   # a narrative role returns once a post source (X / Telegram) exists
   use_in_scoring: false          # LLM features in the safety / attention modules (compare with a replay variant)
   interval_minutes: 60           # token features refreshed this often per token
   max_tokens_per_round: 20       # risk tokens scored per round
@@ -326,7 +336,8 @@ telegram:                        # read-only notifications + commands (phase 12)
 
 real_lp:                         # real LP positions of other wallets (phase 11)
   enabled: true
-  scan_minutes: 30               # on-chain scan of open positions per pool (getProgramAccounts by lb_pair)
+  scan_minutes: 5                # on-chain scan of open positions per pool (getProgramAccounts by lb_pair, ~10 credits
+                                 # per pool): frequent scans catch more positions while open (shape = realism)
   max_wallet_queries_per_scan: 40   # Meteora Data API /positions/{pool}/pnl calls per scan (all pools)
   max_pages_per_wallet: 3        # 100 positions per page
   refetch_hours: 6               # re-query a (wallet, pool) at most this often (closed ones get priority)

@@ -59,21 +59,13 @@ export const TokenSocialSchema = z.object({
 });
 export type TokenSocial = z.infer<typeof TokenSocialSchema>;
 
-export const NarrativeSchema = z.object({
-  labels: z.array(z.object({ i: z.number().int().min(0), label: z.enum(["bullish", "bearish", "shill", "fud", "organic"]) })),
-  narrative_fit: z.number().int().min(0).max(100).describe("fit of the token with narratives that are currently hot"),
-  hot_narratives: z.array(z.string().max(40)).max(5),
-  attention_score: z.number().int().min(0).max(100).describe("organic attention, discounting shill / bot content"),
-});
-export type Narrative = z.infer<typeof NarrativeSchema>;
-
 export const ExplainerSchema = z.object({
   ringkasan: z.string().max(1500).describe("ringkasan dalam Bahasa Indonesia, 3-6 kalimat, hanya dari angka yang diberikan"),
   pelajaran: z.array(z.string().max(200)).max(4),
 });
 export type Explainer = z.infer<typeof ExplainerSchema>;
 
-export type Role = "token_social" | "narrative" | "explainer";
+export type Role = "token_social" | "explainer";
 
 export interface LlmResult<T> {
   ok: boolean;
@@ -207,14 +199,6 @@ export class LlmLayer {
       "token_social", token,
       "Assess the social / web presence of this Solana token for signs of a low-effort or fake project: fake or bought accounts, template websites, missing or inconsistent contract address (compare the mint given below with any address in the links). Score conservatively when information is missing.",
       data, TokenSocialSchema, o,
-    );
-  }
-
-  narrative(token: string, data: { token: Record<string, unknown>; posts: string[] }, o?: { force?: boolean; sessionId?: string }) {
-    return this.run(
-      "narrative", token,
-      "Classify each post (index i) as bullish, bearish, shill, fud or organic, then rate how well the token fits narratives that are hot right now and how much of the attention looks organic.",
-      data, NarrativeSchema, o,
     );
   }
 

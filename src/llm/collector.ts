@@ -10,8 +10,8 @@ import type { LlmLayer } from "./layer.ts";
 /**
  * LLM token features (addendum 6.2), only while the layer is active:
  *  - token_social: Jupiter metadata + DexScreener profile links -> llm_social_score (safety);
- *  - narrative: needs social posts; no free source is wired yet (X / Telegram), so the role stays
- *    idle until a post source exists — the scoring feature then stays null.
+ * A narrative / post-classification role was removed: no free post source (X, Telegram) is wired;
+ * it returns together with such a source.
  * Each risk token is refreshed at most every interval_minutes; the layer caches and budgets calls.
  */
 export class LlmFeatureCollector {

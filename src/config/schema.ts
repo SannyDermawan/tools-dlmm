@@ -222,6 +222,8 @@ export const ConfigSchema = z
           .object({
             tokens_base_url: z.url(),
             keyed_tokens_base_url: z.url(),
+            swap_base_url: z.url(),
+            keyed_swap_base_url: z.url(),
             datapi_base_url: z.url(),
             use_datapi: z.boolean(),
             max_rps: pos,
@@ -325,6 +327,10 @@ export const ConfigSchema = z
             priority_fee_floor_micro_lamports: nonneg,
             tx_failure_rate: frac,
             slippage_margin_pct: nonneg,
+            swap_model: z.enum(["aggregator", "pool"]),
+            aggregator: z
+              .object({ quote_notional_usd: pos, quote_interval_minutes: pos, fallback_cost_pct: nonneg, max_quote_age_minutes: pos })
+              .strict(),
             position_base_rent_sol: nonneg,
             position_default_bins: z.number().int().min(1),
             bins_per_tx: z.number().int().min(1),
@@ -366,10 +372,12 @@ export const ConfigSchema = z
           .object({
             mode: z.enum(["full", "balanced"]),
             max_combos: z.number().int().min(1),
+            baseline_max_combos: z.number().int().min(1).nullable().default(null),
             seed: z.number().int(),
           })
           .strict(),
         cooldown_enabled: z.array(z.boolean()).min(1).default([false]),
+        cooldown_min_session_minutes: nonneg.default(0),
         entry_filter: z.array(z.enum(["none", "supertrend_break", "rsi_reversal", "bollinger_reversion"])).min(1).default(["none"]),
         cohort_interval_minutes: nonneg,
         max_positions: z.number().int().min(1),
@@ -425,7 +433,7 @@ export const ConfigSchema = z
         max_input_chars: z.number().int().min(200),
         activation: z.object({ min_clean_sessions: z.number().int().min(0), since: z.string(), max_gap_minutes: nonneg }).strict(),
         roles: z
-          .object({ token_social: z.boolean(), narrative: z.boolean(), explainer: z.boolean() })
+          .object({ token_social: z.boolean(), explainer: z.boolean() })
           .strict(),
         use_in_scoring: z.boolean(),
         interval_minutes: pos,

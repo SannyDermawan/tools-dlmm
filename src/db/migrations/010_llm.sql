@@ -3,7 +3,7 @@
 CREATE TABLE llm_calls (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
   ts             INTEGER NOT NULL,
-  role           TEXT NOT NULL,          -- token_social | narrative | explainer
+  role           TEXT NOT NULL,          -- token_social | explainer
   provider       TEXT NOT NULL,          -- anthropic | openai_compatible | local
   model          TEXT NOT NULL,          -- requested model
   served_model   TEXT,                   -- model that answered (differs after a refusal fallback)
@@ -28,7 +28,7 @@ CREATE INDEX llm_calls_cache ON llm_calls(cache_key, ts);
 CREATE TABLE llm_features (
   token   TEXT NOT NULL,
   ts      INTEGER NOT NULL,
-  name    TEXT NOT NULL,                 -- llm_social_score | llm_narrative_score
+  name    TEXT NOT NULL,                 -- llm_social_score
   value   REAL,
   call_id INTEGER,
   PRIMARY KEY (token, ts, name)
