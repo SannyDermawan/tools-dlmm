@@ -486,6 +486,57 @@ lpCmd
     app.db.close();
   });
 
+program
+  .command("portfolio")
+  .description("sequential account over stored positions: one at a time, compounding, daily stop (Friday-style calendar and drawdown)")
+  .option("-s, --session <id...>", "simulation session(s); several are chained by time")
+  .option("--last <n>", "the last N finished live sessions", (v) => parseInt(v, 10))
+  .requiredOption("-m, --mode <mode>", "entry mode: friday_scalp, meridian_preset, signal_enter, signal_watch, all_pools_baseline")
+  .option("-w, --where <filter...>", "grid_combo filters: key=value or key~prefix, e.g. exit_policy~scalp bins_per_side=34 strategy=spot")
+  .option("--capital <usd>", "starting capital", parseFloat)
+  .option("--fraction <f>", "share of the equity per trade (1 = all, compounding)", parseFloat)
+  .option("--max-trade <usd>", "trade size cap in USD (0 = none)", parseFloat)
+  .option("--daily-stop <pct>", "stop for the day after a realized loss of this % of the day's start equity (0 = off)", parseFloat)
+  .option("--tz <tz>", "WIB | UTC (day boundary)")
+  .option("--pick <rule>", "first | random | score when several positions open together")
+  .option("--seed <n>", "seed for --pick random", (v) => parseInt(v, 10))
+  .option("--all", "include positions with a data gap")
+  .option("--days <n>", "show only the last N days of the calendar", (v) => parseInt(v, 10))
+  .option("-o, --out <dir>", "write the markdown and the trade CSV here", "reports/portfolio")
+  .action(async (opts) => {
+    const app = createApp(cfgPath());
+    const { runPortfolio, portfolioMarkdown, equityCsv } = await import("./analysis/portfolio.ts");
+    const { mkdirSync, writeFileSync } = await import("node:fs");
+    const c = app.lc.config.portfolio;
+    let ids: string[] = opts.session ?? [];
+    if (opts.last)
+      ids = app.db
+        .all<{ session_id: string }>("SELECT session_id FROM sessions WHERE kind = 'session' AND status != 'running' ORDER BY start_at DESC LIMIT ?", opts.last)
+        .map((r) => r.session_id);
+    if (!ids.length) throw new Error("pass --session <id> or --last <n>");
+    ids = ids.map((id) => app.db.get<{ session_id: string }>("SELECT session_id FROM sessions WHERE session_id LIKE ? || '%' ORDER BY start_at DESC", id)?.session_id ?? id);
+    const where = (opts.where ?? []).map((w: string) => {
+      const m = /^([a-z_][a-z0-9_]*)([=~])(.*)$/.exec(w);
+      if (!m) throw new Error(`bad filter "${w}" (use key=value or key~prefix)`);
+      return { key: m[1], op: m[2] as "=" | "~", value: m[3] };
+    });
+    const r = runPortfolio(app.db, {
+      sessionIds: ids, mode: opts.mode, where,
+      startCapitalUsd: opts.capital ?? c.start_capital_usd, sizeFraction: opts.fraction ?? c.size_fraction,
+      maxTradeUsd: opts.maxTrade === undefined ? c.max_trade_usd : opts.maxTrade > 0 ? opts.maxTrade : null,
+      dailyStopPct: opts.dailyStop ?? c.daily_stop_pct, tz: opts.tz ?? c.tz, pick: opts.pick ?? c.pick, seed: opts.seed ?? 1,
+      windowSeconds: c.window_seconds, cleanOnly: !opts.all,
+    });
+    const md = portfolioMarkdown(r, { calendarDays: opts.days });
+    console.log(`sessions: ${ids.map((i) => i.slice(0, 8)).join(", ")}\n\n${md}`);
+    mkdirSync(opts.out, { recursive: true });
+    const stem = `${opts.mode}-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}`;
+    writeFileSync(`${opts.out}/${stem}.md`, md + "\n");
+    writeFileSync(`${opts.out}/${stem}.csv`, equityCsv(r));
+    console.log(`\nwritten: ${opts.out}/${stem}.md, .csv`);
+    app.db.close();
+  });
+
 const tgCmd = program.command("telegram").description("read-only Telegram notifications and commands (phase 12)");
 const tgSetup = async () => {
   const app = createApp(cfgPath());

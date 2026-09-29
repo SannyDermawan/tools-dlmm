@@ -441,6 +441,16 @@ export const ConfigSchema = z
           .strict(),
         cooldown_enabled: z.array(z.boolean()).min(1).default([false]),
         cooldown_min_session_minutes: nonneg.default(0),
+        signal_entry: z
+          .object({
+            trigger: z.enum(["cohort", "event", "both"]),
+            min_gap_minutes: nonneg,
+            max_per_pool: z.number().int().min(1),
+            require_flow_confirm: z.boolean(),
+            flow_wait_minutes: pos,
+          })
+          .strict()
+          .default({ trigger: "cohort", min_gap_minutes: 15, max_per_pool: 6, require_flow_confirm: false, flow_wait_minutes: 10 }),
         entry_filter: z.array(z.enum(["none", "supertrend_break", "rsi_reversal", "bollinger_reversion", "flow_confirm"])).min(1).default(["none"]),
         cohort_interval_minutes: nonneg,
         max_positions: z.number().int().min(1),
@@ -459,6 +469,19 @@ export const ConfigSchema = z
           })
           .strict(),
         min_positions_for_features: z.number().int().min(1),
+      })
+      .strict(),
+    portfolio: z
+      .object({
+        start_capital_usd: pos,
+        size_fraction: frac,
+        max_trade_usd: pos.nullable(),
+        daily_stop_pct: nonneg,
+        tz: z.enum(["WIB", "UTC"]),
+        pick: z.enum(["first", "random", "score"]),
+        window_seconds: pos,
+        report_modes: z.array(z.string()),
+        report_min_trades: z.number().int().min(1),
       })
       .strict(),
     indicators: z

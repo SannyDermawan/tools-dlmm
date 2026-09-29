@@ -602,6 +602,63 @@ Replay of 1b7a58fc, clean positions:
 Every volume trigger still loses against holding in established pools. Keep them in the grid only
 to measure them in fresh pools.
 
+## Stage 3: cost realism (2026-09-29, cloud) ✅
+Goal: the simulator should not flatter trades that a real account could not make. All parts are
+config switches (`simulation.*`), each one measured in the report.
+1. **Price impact by size, taken at the exit.** A swap now pays, on top of the aggregator quote,
+   the impact of its size beyond the quoted trade: `V / (depth_factor x TVL) - quote_notional /
+   (depth_factor x TVL)` (constant-product depth, `depth_factor` 2, capped at 30%). TVL is the pool's
+   TVL **at the moment of the swap** (metrics event), so a pool emptied by a dump makes the exit
+   expensive. `exit_to` now defaults to **`quote`**: the tokens left in a position are sold at that
+   size and TVL. With `none` a dumped position is marked at the mid price (what the Meteora tracker
+   shows); the realism check keeps `none` on purpose. Note: this lowers PnL of every position that
+   ends in the risky token, so old and new sessions are not comparable without a replay.
+2. **Token-2022 transfer tax** (`costs.transfer_tax`): the token's transfer fee (token_security)
+   is charged on every transfer of that token: deposit, withdrawal, claim, and each swap leg (open
+   with a balancing swap = 2 transfers of the X part; close with `exit_to: quote` = withdrawal + swap
+   leg). Rare on memecoins (1 of 20 tokens had the extension, at 0%); the per-transfer fee cap is ignored.
+3. **Collect fee mode: nothing to change.** Checked on live bins: in a quote-only pool
+   (PARASITE-SOL, mode 1) `fee_x_per_token` did not move and `fee_y_per_token` did, so the bin fee
+   accumulators already carry the mode (swap-event attribution follows it through `feeOnTokenX`). A
+   test pins both. The report has a "pool fee mode" dimension.
+4. **Size vs liquidity** (`simulation.size_limit`, default `flag`): the position's size as % of the
+   pool TVL at the open is journaled; `cap` shrinks it to `max_pct_of_tvl` (2%), `skip` refuses it
+   (`oversized_vs_tvl`). Report dimension "size vs TVL at open".
+5. **Report:** every table has *tracker %* (PnL before costs, what a tracker shows) and *break-even %*
+   (the trade's cost in % of capital); a new section splits both per entry mode and exit policy
+   with the cost split (swap, tx, tax, composition, bin array; position rent is refunded and is not a cost).
+   Old sessions show ~96% of the cost as swap cost.
+Caveat when reading the size table: large positions relative to TVL sit in a few pools (a pump in one
+pool made "2-5%" look great in one replay): it is a pool effect, not proof that size helps.
+Tests: `test/costsStage3.test.ts` (13).
+
+## Stage 4: event entries and the sequential account (2026-09-29, cloud) ✅
+**Event entries for the signal modes** (`grid.signal_entry`, default `cohort` = unchanged):
+- `event`: signal modes enter when a pool's signal **turns admitted** (a rising edge to MASUK for
+  signal_enter, PANTAU for signal_watch), right at the scoring round, instead of at the next cohort.
+  `both`: cohorts and events. Positions carry `entry_trigger`; the report has the table *entry trigger
+  (signal modes)* and the event counts (rising edges, entries, what stopped the rest).
+- Limits: `min_gap_minutes` per pool and mode between entries (cohort entries count, so the first
+  round after a cohort does not double-enter), `max_per_pool` events per session; optional
+  `require_flow_confirm` (Friday's one-minute flow confirmation must pass, waiting `flow_wait_minutes`
+  while the signal stays admitted). A pool with stale price data is skipped and the edge is seen again
+  on the next round. Replay sessions now keep the grid stats in their notes.
+- First replay (45 min, 8 pools, one session, pool effects dominate, proves nothing): cohort 700
+  positions +2.27% vs event 1,050 positions +2.06% (tracker 2.76% vs 2.63%).
+**Sequential account** (`dlmm portfolio`, `src/analysis/portfolio.ts`): a manual trader holds ONE
+position at a time; the grid opens hundreds at once. The journal of a chosen mode (and grid
+filters `key=value` / `key~prefix`, e.g. `exit_policy~scalp bins_per_side=34`) is replayed as an account:
+- takes the next opportunity after it is free (positions opening while busy are skipped; positions
+  opening within 60 s of each other are one opportunity, picked by `first` | `random` (seed) | `score`);
+- compounding (`--fraction`), trade size cap (`--max-trade`, a bigger swap moves the price and the
+  stored % is NOT re-priced), daily stop (`--daily-stop`: no new trades after a realized loss of X% of
+  the day's start equity), day boundary WIB or UTC by close time, several sessions chained (`--last N`);
+- output: final equity, return, win rate, profit factor, max drawdown (trades and days), longest
+  losing streak, best / worst day, positive days, daily Sharpe, the calendar; markdown + trade CSV in
+  `reports/portfolio/`. The session report shows it for `portfolio.report_modes` (friday_scalp,
+  meridian_preset) once they have 5 sequential trades.
+Tests: `test/eventEntry.test.ts` (7), `test/portfolio.test.ts` (9). 282 tests total.
+
 ## RPC: Helius Free + swap stream redesign (2026-09-29)
 - `.env` points to Helius (Free: 1M credits/month, 10 rps). Rate limits: critical 3 rps +
   swap stream 5 rps + token security 0.75 rps.

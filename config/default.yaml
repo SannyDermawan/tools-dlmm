@@ -300,6 +300,14 @@ grid:
     wide_range: { bins_per_side: [69, 100, 150], strategy: spot }  # own widths; bins_per_side ignored
   cooldown_enabled: [true, false] # signal modes run with and without pool cooldown (baseline: never)
   cooldown_min_session_minutes: 120 # shorter sessions: cooldown dimension off (4-12 h cooldowns cannot trigger)
+  signal_entry:                 # when the signal modes (signal_enter / signal_watch) open positions
+    trigger: cohort             # cohort: at the cohort times (as before) | event: when a pool's signal turns
+                                # admitted (a rising edge: LEWATI / other -> MASUK, or PANTAU for signal_watch)
+                                # | both: cohorts and events (positions carry entry_trigger, compare them in the report)
+    min_gap_minutes: 15         # per pool and mode between two entries (cohort or event)
+    max_per_pool: 6             # event entries per pool and mode in one session
+    require_flow_confirm: false # an event enters only while Friday's one-minute flow confirmation passes
+    flow_wait_minutes: 10       # ... waiting up to this long for it, as long as the signal stays admitted
   entry_filter: [none]          # indicator entry filters (phase 13), on hold until sessions carry enough
                                 # candles: [none, supertrend_break, rsi_reversal, bollinger_reversion]
   sampling:                     # the full grid is huge: balanced random sample of combinations,
@@ -324,6 +332,17 @@ memory:                          # pool / token memory across sessions (phase 10
     oor_hours: 12
     modes: [signal_enter]        # closes of these entry modes drive the cooldown
   min_positions_for_features: 5  # pool history features need at least this many positions
+
+portfolio:                       # sequential account: one position at a time, compounding, daily stop (dlmm portfolio)
+  start_capital_usd: 1000
+  size_fraction: 1               # share of the equity per trade
+  max_trade_usd: 5000            # trade size cap (a bigger swap moves the price); null = none
+  daily_stop_pct: 0              # 0 = off; e.g. 5: no new trades after a realized loss of 5% of the day's start equity
+  tz: WIB                        # the day boundary of the calendar
+  pick: first                    # several positions opening together: first | random | score (highest signal score)
+  window_seconds: 60             # positions opening within this window are one opportunity
+  report_modes: [friday_scalp, meridian_preset]   # modes summarized in the session report
+  report_min_trades: 5
 
 indicators:                      # chart indicators from our own OHLCV (phase 13); regime features + entry filters
   enabled: true

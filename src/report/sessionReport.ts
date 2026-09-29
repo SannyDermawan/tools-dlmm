@@ -3,6 +3,8 @@ import { join, resolve } from "node:path";
 import type { Db } from "../db/index.ts";
 import { getSession } from "../db/repo.ts";
 import { realismMarkdown } from "../analysis/realism.ts";
+import { portfolioReportMarkdown } from "../analysis/portfolio.ts";
+import { loadConfig } from "../config/load.ts";
 import { calibrationMarkdown, groupComparison, groupComparisonMarkdown, reconciliationMarkdown, safetyMemoryMarkdown, breakEvenMarkdown, entryFilterMarkdown, scoreCalibration, signalVsBaseline, signalVsBaselineMarkdown } from "./analytics.ts";
 import { markdownToHtml } from "./html.ts";
 
@@ -53,6 +55,11 @@ function table(rows: Agg[], keyTitle: string): string {
   return `${head}\n${body}`;
 }
 
+/** Portfolio defaults for the report: the config the session ran with is not stored in full, so use the current default config. */
+function loadReportPortfolioConfig(_db: Db, _sessionId: string) {
+  return loadConfig().config.portfolio;
+}
+
 export interface ReportPaths {
   dir: string;
   markdown: string;
@@ -98,6 +105,7 @@ export function writeSessionReport(db: Db, simSessionId: string, outDir = "repor
     ["signal action at entry", "COALESCE(json_extract(p.grid_combo,'$.signal_action'),'none')"],
     ["entry mode x signal action", "p.entry_mode || ' / ' || COALESCE(json_extract(p.grid_combo,'$.signal_action'),'none')"],
     ["entry filter (indicators)", "COALESCE(p.entry_filter, 'none')"],
+    ["entry trigger (signal modes)", "COALESCE(json_extract(p.grid_combo,'$.entry_trigger'), '-')"],
     ["size vs TVL at open", "CASE WHEN json_extract(r.detail,'$.sizePctTvl') IS NULL THEN 'unknown' WHEN json_extract(r.detail,'$.sizePctTvl') < 0.5 THEN '< 0.5%' WHEN json_extract(r.detail,'$.sizePctTvl') < 2 THEN '0.5-2%' WHEN json_extract(r.detail,'$.sizePctTvl') < 5 THEN '2-5%' ELSE '> 5%' END"],
     ["pool fee mode", "CASE (SELECT collect_fee_mode FROM pools WHERE pool = p.pool) WHEN 1 THEN 'quote only' WHEN 0 THEN 'input token' ELSE 'unknown' END"],
     ["pool cooldown (signal modes)", "CASE p.cooldown_enabled WHEN 1 THEN 'on' WHEN 0 THEN 'off' ELSE 'n/a' END"],
@@ -163,6 +171,13 @@ export function writeSessionReport(db: Db, simSessionId: string, outDir = "repor
     md.push("");
     md.push("| action | signals | used for a signal-mode entry |\n|---|--:|--:|\n" + sigs.map((x) => `| ${x.action} | ${x.n} | ${x.taken} |`).join("\n"));
     md.push("");
+    try {
+      const ev = (JSON.parse(s.notes ?? "{}").grid?.events ?? null) as { detected: number; opened: number; skipped: Record<string, number> } | null;
+      if (ev && ev.detected > 0)
+        md.push(`Event entries (grid.signal_entry): ${ev.detected} rising edges, ${ev.opened} entries${Object.keys(ev.skipped).length ? `; not entered: ${Object.entries(ev.skipped).map(([k, v]) => `${k} ${v}`).join(", ")}` : ""}. Compare cohort and event entries in the table *entry trigger (signal modes)*.\n`);
+    } catch {
+      /* notes are free text in old sessions */
+    }
     md.push("The main measure of signal value is the **entry mode** table: `signal_enter` vs `all_pools_baseline` (blueprint 18.1). Baseline positions record the pool's signal at entry, so the table *signal action at entry* shows whether skipping LEWATI pools was right.");
     md.push("");
   }
@@ -171,6 +186,10 @@ export function writeSessionReport(db: Db, simSessionId: string, outDir = "repor
   md.push("## Signal vs baseline (blueprint 18.1 — the main measure)");
   md.push("");
   md.push(signalVsBaselineMarkdown(cmp));
+  md.push("");
+  md.push("## Sequential account (one position at a time, compounding)");
+  md.push("");
+  md.push(portfolioReportMarkdown(db, simSessionId, loadReportPortfolioConfig(db, simSessionId)));
   md.push("");
   md.push("## Tracker PnL, break-even and where the cost comes from");
   md.push("");

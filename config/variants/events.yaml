@@ -1,0 +1,12 @@
+# Signal modes enter when a pool's signal turns admitted (event) as well as at cohorts (stage 4):
+#   npm run dlmm -- -c config/variants/events.yaml sim replay -s <data session>
+# Compare the two triggers in the report table "entry trigger (signal modes)".
+extends: default
+config_label: events
+grid:
+  signal_entry:
+    trigger: both
+    min_gap_minutes: 5
+    max_per_pool: 6
+    require_flow_confirm: false
+    flow_wait_minutes: 10

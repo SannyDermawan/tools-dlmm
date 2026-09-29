@@ -134,6 +134,9 @@ export function runReplay(app: AppContext, o: ReplayRunOptions): ReplayRunResult
       if (p.status === "closed") closed++;
       if (p.status === "failed") failed++;
     }
-  finishSession(db, sessionId, "completed", { poolCount: metas.length });
+  finishSession(db, sessionId, "completed", {
+    poolCount: metas.length,
+    notes: JSON.stringify({ fee_attribution: cfg.simulation.fee_attribution, timing, grid: runner.stats, signals: stack?.book.count ?? 0, exitEngine: stack?.exitEngine.stats ?? null }),
+  });
   return { sessionId, positions, closed, failed, timing, grid: runner.stats, signals: stack?.book.count ?? 0, exitEngine: stack?.exitEngine.stats ?? null };
 }
