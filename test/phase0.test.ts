@@ -44,7 +44,7 @@ describe("config", () => {
 describe("database", () => {
   it("migrates idempotently and creates all blueprint tables", () => {
     const db = new Db(":memory:");
-    expect(migrate(db).applied).toEqual(["001_init", "002_scoring", "003_swap_activity", "004_dashboard", "005_p1_modules", "006_grid_dimensions"]);
+    expect(migrate(db).applied).toEqual(["001_init", "002_scoring", "003_swap_activity", "004_dashboard", "005_p1_modules", "006_grid_dimensions", "007_safety_memory"]);
     expect(migrate(db).applied).toEqual([]);
     const names = db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type='table'").map((r) => r.name);
     for (const t of [

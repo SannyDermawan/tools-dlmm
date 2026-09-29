@@ -158,7 +158,8 @@ describe("balanced grid sampling", () => {
     const key = (x: PositionSpec) => `${x.strategy}|${x.binsBelow}|${x.binsAbove}|${x.combo.exit_policy}|${x.variant}`;
     const base = combos.filter((x) => x.entryMode === "all_pools_baseline").map(key);
     expect(base.length).toBeLessThanOrEqual(c.grid.sampling.max_combos);
-    expect(combos.filter((x) => x.entryMode === "signal_enter").map(key)).toEqual(base);
+    for (const cd of c.grid.cooldown_enabled) expect(combos.filter((x) => x.entryMode === "signal_enter" && x.cooldownEnabled === cd).map(key)).toEqual(base);
+    expect(combos.filter((x) => x.entryMode === "all_pools_baseline").every((x) => x.cooldownEnabled === null)).toBe(true);
     const wide = combos.filter((x) => x.variant === "wide_range");
     expect(wide.length).toBeGreaterThan(0);
     expect(wide.every((x) => x.strategy === "spot" && [69, 100, 150].includes(x.combo.bins_per_side as number))).toBe(true);

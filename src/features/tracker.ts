@@ -53,6 +53,8 @@ export class PoolTracker {
   metrics: MetricsObs | null = null;
   metricsHistory: { ts: number; volume1h: number }[] = [];
   snap: BinSnapshot | null = null;
+  /** token reserves of the observed bins per snapshot (raw units; rug detection, phase 10) */
+  reserves: { ts: number; x: number; y: number }[] = [];
   private prevSnap: BinSnapshot | null = null;
   gaps: { source: string; start: number; end: number | null }[] = [];
   lastEventTs = 0;
@@ -88,6 +90,7 @@ export class PoolTracker {
     drop(this.swaps);
     drop(this.activity);
     drop(this.metricsHistory);
+    drop(this.reserves);
     this.gaps = this.gaps.filter((g) => g.end === null || g.end >= cut);
   }
 
@@ -106,6 +109,9 @@ export class PoolTracker {
     this.prevSnap = this.snap;
     this.snap = s;
     this.seen(s.ts);
+    let rx = 0, ry = 0;
+    for (const b of s.bins.values()) (rx += Number(b.x)), (ry += Number(b.y));
+    this.reserves.push({ ts: s.ts, x: rx, y: ry });
     const prev = this.prevSnap;
     if (prev && this.metrics?.xUsd != null && this.metrics?.yUsd != null) {
       const { xUsd, yUsd } = this.metrics;

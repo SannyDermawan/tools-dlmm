@@ -59,6 +59,8 @@ export { exitPolicyLabel };
 
 /** Entry modes that need the decision stack (signals / preset inputs) — skipped without it. */
 const SIGNAL_MODES = new Set(["signal_enter", "signal_watch", "meridian_preset"]);
+/** Entry modes that run with and without the pool cooldown (grid.cooldown_enabled). */
+const COOLDOWN_MODES = new Set(["signal_enter", "signal_watch"]);
 
 /** Deterministic PRNG (mulberry32) for reproducible grid samples. */
 export function rng(seed: number): () => number {
@@ -126,6 +128,7 @@ export function gridCombos(c: Config, opts: { allowSignalModes?: boolean } = {})
   const modes = g.entry_modes.filter((m) => m !== "meridian_preset" && (opts.allowSignalModes || !SIGNAL_MODES.has(m)));
   const out: PositionSpec[] = [];
   for (const entryMode of modes)
+    for (const cooldownEnabled of COOLDOWN_MODES.has(entryMode) ? g.cooldown_enabled : [null])
     for (const [si, bi, di, pi, vi] of sample) {
       const variant = g.variants[vi];
       const isWide = variant === "wide_range";
@@ -134,13 +137,14 @@ export function gridCombos(c: Config, opts: { allowSignalModes?: boolean } = {})
       const sides = g.sides[di];
       const exitPolicy = policies[pi];
       out.push({
-        strategy, sides, exitPolicy, entryMode, variant,
+        strategy, sides, exitPolicy, entryMode, variant, cooldownEnabled,
         binsBelow: sides === "base_only" ? 0 : n,
         binsAbove: sides === "quote_only" ? 0 : n,
         capitalUsd: c.simulation.virtual_capital_usd,
         combo: {
           entry_mode: entryMode, strategy, bins_per_side: n, sides, exit_policy: exitPolicyLabel(exitPolicy), variant,
           sampling: g.sampling.mode,
+          ...(cooldownEnabled !== null ? { cooldown: cooldownEnabled } : {}),
           ...(variant !== "none" && variant !== "wide_range" ? { variant_params: g.variant_params[variant] } : {}),
         },
       });
@@ -160,6 +164,8 @@ export interface GridStats {
   pnlExits: Record<string, number>;
   variantActions: { partial_harvest: number; fee_compounding: number; single_sided_reseed: number };
   preset: { evaluated: number; passed: number; opened: number; partial: number };
+  /** signal-mode positions not opened because the pool was in cooldown (phase 10) */
+  cooldownSkips: number;
   capped: boolean;
 }
 
@@ -171,6 +177,8 @@ export interface GridSignals {
   expectedFeeUsd?: (pool: string, valueUsd: number, t: number) => number | null;
   /** Meridian preset screen inputs of a pool at t (entry mode meridian_preset) */
   presetInputs?: (pool: string, t: number, sim: PoolSimulator, windowMinutes: number) => PresetInputs | null;
+  /** pool memory: cooldown of a pool (or its risk token) at t (phase 10) */
+  memory?: { poolCooldown(pool: string, t: number): { until: number; reason: string } | null };
   /** preset override (tests); default: loaded from config presets.meridian */
   preset?: MeridianPreset;
 }
@@ -203,7 +211,7 @@ export class GridRunner {
   readonly stats: GridStats = {
     cohorts: 0, requested: 0, skippedPools: 0, rebalances: 0, policyExits: 0, rebalanceNotWorth: 0, signalEntries: {}, pnlExits: {},
     variantActions: { partial_harvest: 0, fee_compounding: 0, single_sided_reseed: 0 },
-    preset: { evaluated: 0, passed: 0, opened: 0, partial: 0 }, capped: false,
+    preset: { evaluated: 0, passed: 0, opened: 0, partial: 0 }, cooldownSkips: 0, capped: false,
   };
 
   constructor(
@@ -267,9 +275,14 @@ export class GridRunner {
       }
       const sig = this.signals?.book.latestFor(sim.meta.pool, ts) ?? null;
       const rec = sig?.recommendation ?? null;
+      const cooldown = this.signals?.memory?.poolCooldown(sim.meta.pool, ts) ?? null;
       let taken = false;
       for (const spec of this.combos) {
         if (!this.admits(spec.entryMode, sig?.action ?? null)) continue;
+        if (spec.cooldownEnabled && cooldown) {
+          this.stats.cooldownSkips++;
+          continue;
+        }
         if (this.full()) return;
         const matches = !!rec && rec.strategy === spec.strategy && rec.sides === spec.sides &&
           rec.bins_below === spec.binsBelow && rec.bins_above === spec.binsAbove;

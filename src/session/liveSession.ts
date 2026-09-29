@@ -73,6 +73,7 @@ export async function runLiveSession(app: AppContext, o: LiveSessionOptions = {}
     const stack = cfg.scoring.enabled ? buildDecisionStack(app.db, cfg, app.configVersion, ctx.sessionId, metas, Date.now(), swapPoolSet) : null;
     runner = new GridRunner(cfg, sims, clock, log, stack?.gridSignals);
     stack?.attach(runner);
+    if (stack) sink.onResult = (p, r) => safe("memory", () => stack.memory.onClose(p, r));
     decision = stack;
     for (const [token, p] of ctx.usdPrices) for (const s of sims.values()) if (s.meta.tokenY === token) s.onMarket({ quoteUsd: p.usd });
     const s = sims;
@@ -158,8 +159,11 @@ export async function runLiveSession(app: AppContext, o: LiveSessionOptions = {}
     }
     // runCollection already closed the session row; record the simulator outcome in notes.
     const d = decision as DecisionStack | null;
+    // pool / token memory for later sessions (phase 10); live sessions only (replays are not new data)
+    safe("memory persist", () => d?.memory.persist(Date.now(), [...s.keys()]));
     finishSession(app.db, res.sessionId, res.status, {
-      notes: JSON.stringify({ timing, grid: r.stats, simErrors: errors, signals: d?.book.count ?? 0, exitEngine: d?.exitEngine.stats ?? null }),
+      notes: JSON.stringify({ timing, grid: r.stats, simErrors: errors, signals: d?.book.count ?? 0, exitEngine: d?.exitEngine.stats ?? null,
+        memory: d?.memory.stats ?? null, rugs: d?.rugs.found ?? [] }),
     });
     // fee reconciliation vs the API for the session window (skipped silently when offline)
     try {

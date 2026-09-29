@@ -13,7 +13,9 @@ export interface Signal {
   pool: string;
   pool_category: string;
   action: Action;
-  safety_gate: { passed: boolean; reasons: string[] };
+  safety_gate: { passed: boolean; reasons: string[]; filters?: string[] };
+  /** every identified risk, veto or not (decision log, addendum 3.6) */
+  risks?: string[];
   scores: Record<string, number | null>;
   context_multiplier: number;
   final_score: number | null;
@@ -61,7 +63,8 @@ export function buildSignal(r: ScoreResult, ctx: { sessionId: string; configVers
     pool: r.pool,
     pool_category: r.category,
     action: r.action,
-    safety_gate: { passed: r.gate.passed, reasons: r.gate.reasons },
+    safety_gate: { passed: r.gate.passed, reasons: r.gate.reasons, filters: r.gate.filters ?? [] },
+    risks: r.risks ?? [],
     scores: Object.fromEntries(Object.entries(r.modules).map(([k, v]) => [k, round(v, 1)])),
     context_multiplier: r.context.multiplier,
     final_score: round(r.finalScore, 1),
@@ -90,6 +93,16 @@ export function buildSignal(r: ScoreResult, ctx: { sessionId: string; configVers
   };
 }
 
+/** LEWATI signals of one round with the main reason: first gate reason, else score / confidence. */
+export function rejectedCandidates(signals: Signal[]): { pool: string; score: number | null; action: Action; reason: string }[] {
+  return signals
+    .filter((s) => s.action === "LEWATI")
+    .map((s) => ({
+      pool: s.pool, score: s.final_score, action: s.action,
+      reason: !s.safety_gate.passed ? `gate: ${s.safety_gate.reasons[0] ?? "failed"}` : s.final_score === null ? "no score (missing data)" : "score / confidence below threshold",
+    }));
+}
+
 /**
  * Signal Engine: turns every score into a signal, journals it (taken = 0 until a position uses
  * it) and keeps the latest signal per pool for entry decisions.
@@ -111,12 +124,16 @@ export class SignalBook {
     for (const s of out) this.latest.set(s.pool, s);
     this.count += out.length;
     if (this.db && out.length) {
+      // decision log: the pools skipped in this round (and why), kept with every MASUK / PANTAU
+      const rejected = rejectedCandidates(out);
       this.db.insertMany(
         "signals",
         out.map((s) => ({
           signal_id: s.signal_id, session_id: s.session_id, pool: s.pool, ts: s.ts, action: s.action,
           recommendation: JSON.stringify(s.recommendation), expectations: JSON.stringify(s.expectations),
           top_reasons: JSON.stringify(s.top_reasons), taken: 0, config_version: s.config_version, payload: JSON.stringify(s),
+          risks: JSON.stringify(s.risks),
+          rejected_candidates: s.action === "LEWATI" ? null : JSON.stringify(rejected),
         })),
       );
     }

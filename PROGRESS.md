@@ -1,6 +1,6 @@
 # Progress log
 
-Blueprint: `Blueprint_DLMM_Signal_Engine_Simulator.docx` v1.0. Done: Phase 0–8 (tooling). Weight calibration itself waits for data: >= 5 clean data sessions.
+Blueprint: `Blueprint_DLMM_Signal_Engine_Simulator.docx` v1.0. Done: Phase 0–10 (tooling). Weight calibration itself waits for data: >= 5 clean data sessions.
 
 ## Phase 0 — Setup ✅
 - TypeScript + Node 24 (`node:sqlite`, WAL), YAML config validated with zod (strict keys),
@@ -255,6 +255,50 @@ Against the API alone, 11/20 pools were within ±5% (window 19:15–20:00).
   - the first full 2 h session (`helius-2h-1`) and a check of its report;
   - fee reconciliation passing;
   - one test session with the new grid running without error.
+
+## Phase 10 — Safety filters, blocklist, pool memory (addendum v1.1 §3) ✅ (code + tests; no live run yet)
+- **Jupiter token audit** (`src/collectors/tokenAudit.ts`, collector `token_audit`, every 15 min, one
+  batch request per 50 mints): organic score, holders, mcap, launchpad, dev wallet, token / first
+  pool age, top holders, dev balance, `isSus`; bot holders + bundlers from the **unofficial** datapi
+  (`api.jupiter.use_datapi`). PVP rivals = other mints with the same symbol / name and >= $10k 24 h
+  volume. Rows in `token_audit` (migration `007_safety_memory`); readers take the latest row <= t
+  younger than `scoring.max_age_seconds.audit` (45 min).
+- **Audit gate** (`src/features/auditGate.ts`) on top of the blueprint gate: bot holders > 30%,
+  `isSus`, launchpad allow / block lists, token age min / max -> GAGAL; PVP -> penalty / fail /
+  ignore; organic score < 50 -> safety-score penalty. Missing audit never vetoes. Bluechip pools
+  only check the blocklist. Every veto is tagged with a filter name.
+- **Blocklist** (tokens + dev wallets, `dlmm blocklist add|remove|list`): checked first, a blocked
+  pool is LEWATI without computing features. Entries are time-stamped and removal is a soft delete,
+  so replays of older sessions are not changed by later edits.
+- **Automatic rug detection** (`src/features/rugDetector.ts`, `rug_detection`), every scoring
+  round: price −50% within 15 min AND −50% liquidity, or the dev balance −50% (audit) -> token and
+  dev blocklisted with `source = auto_rug`, effective from that time on. The liquidity measure is
+  price-invariant (token reserves of the observed bins valued at the window-start price): a first
+  version used USD depth near the active bin and flagged every plain crash as a rug; the test
+  caught it.
+- **Pool memory + cooldown** (`src/features/memory.ts`, `pool_memory`): closes of `signal_enter`
+  drive cooldowns — one low-yield close -> pool cooldown 4 h; 3 out-of-range cohorts in a row
+  (the cohort is the unit: its first decisive close counts) -> pool + token cooldown 12 h. Pool
+  history features (`pool_hist_net_pct`, `pool_hist_win_rate`) come from clean **baseline**
+  positions only (no selection bias). Live sessions persist one row per pool / token at the end;
+  readers see a session only after it ended (look-ahead safe). Replays use in-session cooldowns
+  but never persist (replays are not new data).
+- **Grid dimension `cooldown_enabled`**: signal modes run with and without the cooldown on the
+  same combinations (baseline never), stored in `sim_positions.cooldown_enabled`. Note: with the
+  default `[true, false]` the signal-mode position count doubles.
+- **Decision log**: signals store `risks` (every identified risk, veto or not) and, for MASUK /
+  PANTAU, `rejected_candidates` (the round's LEWATI pools with their main reason).
+- **Meridian preset** now gets organic score and bot holders from the audit, so presets are no
+  longer always `preset_partial` when the audit has data.
+- Report: new section "Safety filters, blocklist and pool memory": pools removed per filter,
+  signal modes with vs without cooldown, automatic blocklist entries, audit coverage; new
+  dimension table "pool cooldown".
+- Fixed while wiring: a scorer variable shadowing (`blocked`) that broke every scoring call; the
+  blocklist cache keyed by minute (could return a stale "not blocked" within the same minute).
+- Tests: `test/phase10.test.ts` (17 new, 167 total).
+- Not verified live yet (the cloud container that finished this phase has no access to the Solana /
+  Jupiter / Meteora hosts). Next on the laptop: a short session to check the Jupiter audit against
+  the live API, then the next full session.
 
 ## RPC: Helius Free + swap stream redesign (2026-09-29)
 - `.env` points to Helius (Free: 1M credits/month, 10 rps). Rate limits: critical 3 rps +

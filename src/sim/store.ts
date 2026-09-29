@@ -5,6 +5,8 @@ import type { VirtualPosition } from "./position.ts";
 /** Journals virtual positions to sim_positions / sim_position_events / sim_results. */
 export class DbSimSink implements SimSink {
   private events: Row[] = [];
+  /** called for every closed position (pool memory / cooldowns) */
+  onResult: ((p: VirtualPosition, r: PositionResult) => void) | null = null;
 
   constructor(private readonly db: Db, private readonly sessionId: string, private readonly configVersion: string, private readonly flushEvery = 2000) {}
 
@@ -32,7 +34,7 @@ export class DbSimSink implements SimSink {
       status: p.status,
       exit_policy_params: JSON.stringify(p.spec.exitPolicy ?? { type: "hold_to_session_end" }),
       strategy_params: JSON.stringify({ variant: p.spec.variant ?? "none", ...((p.spec.combo.variant_params as object | undefined) ?? {}) }),
-      cooldown_enabled: null,
+      cooldown_enabled: p.spec.cooldownEnabled == null ? null : p.spec.cooldownEnabled ? 1 : 0,
       entry_filter: (p.spec.combo.entry_filter as string | undefined) ?? "none",
     };
   }
@@ -50,7 +52,7 @@ export class DbSimSink implements SimSink {
     if (this.events.length >= this.flushEvery) this.flush();
   }
 
-  result(_p: VirtualPosition, r: PositionResult) {
+  result(p: VirtualPosition, r: PositionResult) {
     this.flush();
     this.db.insert(
       "sim_results",
@@ -63,6 +65,7 @@ export class DbSimSink implements SimSink {
       },
       "OR REPLACE",
     );
+    this.onResult?.(p, r);
   }
 
   flush() {
