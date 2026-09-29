@@ -694,12 +694,14 @@ implementation tests the claims, it does not assume them. Seven points, all done
    10 h): 44% still open after 1 h, median close 0.5 h, PnL known for only 38% (coverage is the limit); nothing
    about long holds can be said before sessions run for days.
 7. **Long-session profile** (`config/session-3d.yaml`): 72 h (or `-d 1440`), reduced sampling, gap thresholds
-   scaled to the cadence. Credits, NOT YET MEASURED on a run of this
-   profile (to be filled in). Measured on the default profile (live session, 40 min, 14 pools): ~4,080 credits =
-   getTransaction 2,277 (swap stream) + getProgramAccounts 1,120 (real LP scans, 10 credits each) +
-   getMultipleAccounts 566 + ~90 other. Estimate for the 3-day profile (an estimate, not a measurement): swap stream
-   paced to its budget (20,000 / 72 h = ~280/h) + real LP scans (12 pools x 10 x 2/h = 240/h) + pool state / bins
-   (~270/h) + other (~100/h) = ~900/h, about 65,000 for 72 h (`session_credit_budget` 90,000).
+   scaled to the cadence. Credits MEASURED on a real 20 min run of this profile
+   (fresh DB, 12 pools, swap budget scaled to the 72 h pacing): 389 credits in 22 minutes, 617 virtual positions,
+   0 gap-tainted. Steady state ~10 credits/min (of which ~4 swap stream, capped by its budget), startup ~61, one real LP
+   scan = 140 (14 pools x 10; every 30 min = ~280/h). Extrapolation: ~360/h core + ~280/h scans + ~280/h swap
+   budget (20,000 / 72 h) = ~920/h, about 66,000 for 72 h (`session_credit_budget` 90,000). For comparison the default
+   profile used 6,337 credits in 62 min (live session, 14 pools). The extrapolation assumes the 20 min steady state
+   holds for days; the real check is the first 72 h run. Do not edit config / schema files while a session runs:
+   the end-of-session report reloads config from disk and a strict schema of the old code rejects new keys (happened once).
 Tests: `test/rangePct.test.ts` (7), `test/yunus.test.ts` (19), `test/ohlcvDaily.test.ts` (5),
 `test/lpOutcomes.test.ts` (10), `test/profiles.test.ts` (5). 328 tests total.
 Replay check (`dlmm sim replay` on a copy of the DB, 45 min): 44 yunus_flip cycles on 3 memecoin pools; the first
