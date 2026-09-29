@@ -99,3 +99,23 @@ export function removeBlock(db: Db, kind: "token" | "dev", key: string, t = Date
   const col = kind === "token" ? "mint" : "wallet";
   return Number(db.run(`UPDATE ${table} SET removed_at = ? WHERE ${col} = ? AND removed_at IS NULL`, t, key).changes);
 }
+
+/**
+ * Token-2022 transfer fee (bps) of a mint from token_security: the latest row at or before t,
+ * whatever its age (a transfer fee is a mint setting), 0 when the mint has no such extension and
+ * null when we never checked it. Cached per (token, hour).
+ */
+export function transferFeeLookup(db: Db) {
+  const cache = new Map<string, number | null>();
+  return (token: string, t: number): number | null => {
+    const k = `${token}|${Math.floor(t / 3_600_000)}`;
+    if (cache.has(k)) return cache.get(k)!;
+    const r = db.get<{ bps: number | null }>(
+      "SELECT transfer_fee_bps bps FROM token_security WHERE token = ? AND ts <= ? AND (error IS NULL OR mint_auth_active IS NOT NULL) ORDER BY ts DESC LIMIT 1", token, t,
+    );
+    const v = r ? (r.bps ?? 0) : null;
+    if (cache.size > 2000) cache.clear();
+    cache.set(k, v);
+    return v;
+  };
+}

@@ -10,6 +10,7 @@ import { writeSessionReport, type ReportPaths } from "../report/sessionReport.ts
 import { buildHeartbeat, writeHeartbeat } from "./heartbeat.ts";
 import type { CollectionHealth } from "../collectors/runner.ts";
 import type { ScoringRunner } from "../features/runner.ts";
+import { transferFeeLookup } from "../features/safetyData.ts";
 import { buildDecisionStack, type DecisionStack } from "../signals/stack.ts";
 import { swapStreamEnabled } from "../collectors/swapStream.ts";
 import type { ReplayEvent } from "../sim/replay.ts";
@@ -68,7 +69,13 @@ export async function runLiveSession(app: AppContext, o: LiveSessionOptions = {}
     const clock = new SessionClock(Date.now(), timing);
     sink = new DbSimSink(app.db, ctx.sessionId, app.configVersion, 500);
     const metas = [...ctx.pools.values()];
-    sims = new Map(metas.map((m) => [m.pool, new PoolSimulator(m, cfg, sink!)]));
+    const feeOf = transferFeeLookup(app.db);
+    const newSim = (m: (typeof metas)[number]) => {
+      const s = new PoolSimulator(m, cfg, sink!);
+      s.transferFeeBps = (token) => feeOf(token, Date.now());
+      return s;
+    };
+    sims = new Map(metas.map((m) => [m.pool, newSim(m)]));
     const swapPoolSet = new Set(metas.filter((m) => swapStreamEnabled(m, cfg.collectors.swap_stream)).map((m) => m.pool));
     const stack = cfg.scoring.enabled ? buildDecisionStack(app.db, cfg, app.configVersion, ctx.sessionId, metas, Date.now(), swapPoolSet) : null;
     runner = new GridRunner(cfg, sims, clock, log, stack?.gridSignals);
@@ -78,7 +85,7 @@ export async function runLiveSession(app: AppContext, o: LiveSessionOptions = {}
     // fresh lane (Friday playbook): pools added during the session get a simulator and a tracker
     ctx.onPoolAdded = (m) => safe("pool added", () => {
       if (sims!.has(m.pool)) return;
-      const sim = new PoolSimulator(m, cfg, sink!);
+      const sim = newSim(m);
       const q = ctx.usdPrices.get(m.tokenY);
       if (q) sim.onMarket({ quoteUsd: q.usd });
       const eco = [...sims!.values()][0]?.market;

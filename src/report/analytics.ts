@@ -335,3 +335,58 @@ export function entryFilterMarkdown(db: Db, simSessionId: string): string {
   out.push("", "A filter keeps weight only if it beats `none` consistently across sessions (addendum 6.1); one session proves nothing.");
   return out.join("\n");
 }
+
+const median = (v: number[]) => {
+  if (!v.length) return null;
+  const s = [...v].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
+
+/**
+ * Tracker PnL vs break-even (Friday's cost guide): the tracker PnL is what the Meteora / LP tracker
+ * shows (value + fees - deposit, no transaction or swap costs); the break-even is the cost of the
+ * trade in % of capital, so the tracker PnL must beat it for the trade to pay. Per entry mode and
+ * per exit policy type (clean closed positions), with the cost split (rent is refunded and is not
+ * a cost). `swap` = balancing + exit swaps incl. their price impact; `tax` = token-2022 transfer fee.
+ */
+export function breakEvenMarkdown(db: Db, simSessionId: string): string {
+  const rows = db.all<{ mode: string; exit: string; cap: number; net: number; cost: number; detail: string }>(
+    `SELECT p.entry_mode mode, COALESCE(json_extract(p.exit_policy_params,'$.type'), 'hold_to_session_end') exit, p.capital_usd cap,
+            r.net_pnl_usd net, r.cost_usd cost, r.detail
+     FROM sim_positions p JOIN sim_results r USING(position_id)
+     WHERE p.session_id = ? AND p.status = 'closed' AND p.gap_tainted = 0`,
+    simSessionId,
+  );
+  if (!rows.length) return "No closed clean positions.";
+  const f = (v: number | null, d = 2) => (v === null ? "-" : v.toFixed(d));
+  const groupBy = (key: (r: (typeof rows)[number]) => string, title: string) => {
+    const g = new Map<string, typeof rows>();
+    for (const r of rows) (g.get(key(r)) ?? g.set(key(r), []).get(key(r))!).push(r);
+    const out = [`| ${title} | n | tracker % avg | tracker % median | break-even % avg | break-even % median | tracker > break-even | swap | tx | tax | composition | bin array |`, "|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|"];
+    for (const [k, rs] of [...g.entries()].sort((a, b) => b[1].length - a[1].length)) {
+      const tracker = rs.map((r) => ((r.net + r.cost) / r.cap) * 100);
+      const be = rs.map((r) => (r.cost / r.cap) * 100);
+      const parts: Record<string, number> = { swap: 0, tx: 0, tax: 0, composition: 0, bin_array: 0 };
+      for (const r of rs)
+        for (const c of (JSON.parse(r.detail).costs ?? []) as { type: string; usd: number; refundable: boolean }[]) {
+          if (c.refundable) continue;
+          const t = c.type.endsWith("swap") && !c.type.startsWith("tx_") ? "swap" : c.type.startsWith("tx_") ? "tx" : c.type === "transfer_tax" ? "tax" : c.type === "composition_fee" ? "composition" : c.type === "bin_array_init" ? "bin_array" : null;
+          if (t) parts[t] += c.usd;
+        }
+      const totalCost = Object.values(parts).reduce((a, b) => a + b, 0) || 1;
+      const share = (x: number) => `${((x / totalCost) * 100).toFixed(0)}%`;
+      const above = tracker.filter((x, i) => x > be[i]).length / rs.length;
+      const mean = (v: number[]) => v.reduce((a, b) => a + b, 0) / v.length;
+      out.push(`| ${k} | ${rs.length} | ${f(mean(tracker), 3)} | ${f(median(tracker), 3)} | ${f(mean(be), 3)} | ${f(median(be), 3)} | ${(above * 100).toFixed(0)}% | ${share(parts.swap)} | ${share(parts.tx)} | ${share(parts.tax)} | ${share(parts.composition)} | ${share(parts.bin_array)} |`);
+    }
+    return out.join("\n");
+  };
+  return [
+    groupBy((r) => r.mode, "entry mode"),
+    "",
+    groupBy((r) => r.exit, "exit policy type"),
+    "",
+    "The tracker PnL excludes every cost the tracker does not show; a strategy that looks positive on a tracker but below its break-even loses money. Cost shares add up to 100% of the non-refundable cost (position rent is refunded on close).",
+  ].join("\n");
+}

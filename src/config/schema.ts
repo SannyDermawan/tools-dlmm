@@ -365,6 +365,7 @@ export const ConfigSchema = z
         starting_asset: z.enum(["quote", "as_needed"]),
         two_sided_x_value_fraction: z.union([z.literal("auto"), frac]),
         exit_to: z.enum(["none", "quote"]),
+        size_limit: z.object({ mode: z.enum(["flag", "cap", "skip"]), max_pct_of_tvl: pos }).strict(),
         fee_event_interval_seconds: pos,
         pnl_eval_seconds: pos,
         gap_taint: z
@@ -391,6 +392,8 @@ export const ConfigSchema = z
             aggregator: z
               .object({ quote_notional_usd: pos, quote_interval_minutes: pos, fallback_cost_pct: nonneg, max_quote_age_minutes: pos })
               .strict(),
+            size_impact: z.object({ enabled: z.boolean(), depth_factor: pos, max_pct: nonneg }).strict(),
+            transfer_tax: z.boolean(),
             position_base_rent_sol: nonneg,
             position_default_bins: z.number().int().min(1),
             bins_per_tx: z.number().int().min(1),

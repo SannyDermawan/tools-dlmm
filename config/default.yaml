@@ -206,7 +206,13 @@ simulation:
                                    # as_needed: assume the needed tokens are already held
   two_sided_x_value_fraction: auto # share of capital placed as X for two-sided positions;
                                    # auto = ask-side bins / all bins (uniform value per bin for Spot)
-  exit_to: none                    # none | quote  (quote: swap X back to quote on close, cost applies)
+  exit_to: quote                   # none | quote. quote: the tokens left in the position are swapped back to the
+                                   # quote token on close, at the swap cost of that moment and size. none marks them at
+                                   # the mid price (the Meteora tracker does): what a position is worth, not what it
+                                   # yields. quote is the default: a thin pool after a dump cannot be sold at mid.
+  size_limit:                      # position size vs pool liquidity (TVL at the open)
+    mode: flag                     # flag: journal + report by size bucket | cap: shrink to max | skip: do not open
+    max_pct_of_tvl: 2              # a swap above 1-2% of the liquidity moves the price noticeably
   fee_event_interval_seconds: 300  # how often a 'fee' event is journaled per position
   pnl_eval_seconds: 30             # TP / SL / trailing / low-yield / variants evaluated this often
   gap_taint:                       # when a data gap makes a position unusable for calibration
@@ -230,6 +236,12 @@ simulation:
     tx_failure_rate: 0.05          # failed tx still pays base + priority fee
     slippage_margin_pct: 0.1       # added on top of the swap cost (quote -> execution drift)
     swap_model: aggregator         # aggregator: Jupiter round-trip quotes (how real LPs swap); pool: the DLMM pool fee
+    size_impact:                   # extra price impact of a swap larger than the quoted trade, at the TVL of that moment
+      enabled: true                # extra % = notional / (depth_factor x TVL) - quote_notional / (depth_factor x TVL)
+      depth_factor: 2              # constant-product: selling V into a pool worth TVL (half per side) moves ~ V / (TVL / 2)
+      max_pct: 30                  # never above this (a wall of sell orders into a dry pool)
+    transfer_tax: true             # token-2022 transfer fee (token_security) on every transfer of that token: deposit,
+                                   # withdrawal, claim and each swap leg. Rare on memecoins; the fee cap per transfer is ignored
     aggregator:
       quote_notional_usd: 500      # typical balancing swap of a $1000 position
       quote_interval_minutes: 5
