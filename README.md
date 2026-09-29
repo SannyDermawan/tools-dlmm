@@ -52,11 +52,18 @@ swap stream falls behind and records data gaps.
 | `dlmm lp collect [-s SESSION] [--scans N]` | real LP positions of other wallets (on-chain scans + Meteora Data API) |
 | `dlmm lp realism [-s SESSION]` | replay simple real positions in the simulator, compare fee and PnL |
 | `dlmm lp wallets [--smart]` | recompute and list LP wallets / smart LPs |
+| `dlmm lp outcomes [-p POOL...] [--since-hours H]` | real positions that opened while we watched, followed to closure: time to close (Kaplan-Meier) and PnL by width / shape / sides / hold time, censoring-aware |
+| `dlmm portfolio -m MODE [-s SESSION...] [-w key=value...]` | sequential account over the stored positions of one entry mode (one at a time, compounding, daily stop) |
 | `dlmm telegram run\|test\|whoami` | read-only Telegram notifier + commands (token and ids in `.env`) |
 | `dlmm llm status\|test` | conditional LLM layer: activation, budget, recent calls, one manual call |
 
 Run with `npm run dlmm -- <command>`. Use `-c path.yaml` for another config; a config file with
 `extends: default` only needs the keys it overrides.
+
+Profiles: `config/session-2h.yaml` (laptop, 2 h) and `config/session-3d.yaml` (24-72 h, reduced sampling:
+pool state 15 s, bin snapshots 120 s, 2 swap samples per pool and minute, real LP scans every 30 min; for a
+24 h run add `-d 1440`). Entry modes: `all_pools_baseline`, `meridian_preset`, `friday_scalp`, `yunus_flip`
+(Yunus / EvilPanda flip cycle, `presets/yunus.yaml`), `signal_enter`, `signal_watch`.
 
 ## Layout
 
@@ -107,7 +114,8 @@ test/                      unit tests (phase0/1/2) + real mainnet fixtures
   * take profit (net or fee-based) and stop loss;
   * trailing TP with a two-stage confirmation;
   * TP/SL combo;
-  * low-yield exit.
+  * low-yield exit;
+  * break-even exit (leave when back at break-even after having been under water, time cap).
 
   PnL rules are evaluated every `simulation.pnl_eval_seconds`.
 * **Strategy variants** (`grid.variants`, addendum v1.1):

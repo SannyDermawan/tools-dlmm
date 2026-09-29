@@ -10,6 +10,8 @@
 # Every knob below is a grid level: the report compares them on identical pools and cohorts.
 
 screen:                          # pool / token screen; null = not applied (the report slices by these instead)
+  categories: [memecoin]         # bluechip pairs have nothing to flip (empty list = every category)
+  require_risk_token_base: true  # the risk token must be the base token X: the flip sells it on the way up
   min_tvl_usd: 10000
   min_mcap_usd: null             # the playbook says >= $5M; off so that the report shows the effect
   min_token_age_hours: null

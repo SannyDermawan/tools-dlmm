@@ -1,0 +1,51 @@
+# Long session profile: 24-72 hours with reduced sampling (Yunus-style holds need days, not minutes).
+# Use:  npm run dlmm -- -c config/session-3d.yaml session start -q            (72 h)
+#       npm run dlmm -- -c config/session-3d.yaml session start -d 1440 -q    (24 h; everything else scales)
+#
+# What is reduced, and why the results stay comparable:
+#  - pool state 5 s -> 15 s, bin snapshots 30 s -> 120 s: fees come from the exact bin fee accumulators,
+#    so slower sampling loses price path detail (a 15 s candle), not fees; the exit rules run every 30 s anyway;
+#  - swap sampling 8 -> 2 per pool and minute: the flow features are ratios, fewer samples = noisier flow,
+#    which only the flow exits / Friday confirmation use;
+#  - real LP scans every 30 min (10 credits per pool and scan), 12 pools instead of 20;
+#  - gap watchdog thresholds follow the slower cadence (a source is stale after ~4 intervals), otherwise every
+#    healthy pool would open false gaps and taint the positions.
+# Credits per hour of this profile were measured on a real run: see PROGRESS.md ("Long-session profile").
+extends: default
+config_label: session-3d
+session:
+  duration_minutes: 4320             # 72 h
+  warmup_minutes: 30
+  stop_new_positions_before_end_minutes: 720   # a yunus cycle / breakeven exit needs time: no new cycles in the last 12 h
+  label: sesi-3hari
+discovery:
+  max_pools: 12
+grid:
+  entry_modes: [all_pools_baseline, yunus_flip, friday_scalp, signal_enter]
+  cohort_interval_minutes: 360       # a cohort every 6 h: ~11 cohorts per pool
+  sampling:
+    max_combos: 60                   # positions cost CPU and disk, not credits
+    baseline_max_combos: 40
+  max_positions: 20000
+collectors:
+  pool_state:
+    interval_seconds: 15
+  bin_snapshot:
+    interval_seconds: 120
+  swap_stream:
+    sample_per_minute: 2
+    credit_budget: 20000
+  ohlcv:
+    interval_seconds: 900
+    refresh_lookback_minutes: 60
+gaps:
+  stale_after_seconds:
+    pool_state: 75
+    bin_snapshot: 480
+    ohlcv: 3600
+real_lp:
+  scan_minutes: 30
+  max_wallet_queries_per_scan: 200   # the Data API is free; a slow scan cadence needs a bigger batch per scan
+rpc:
+  quota:
+    session_credit_budget: 90000

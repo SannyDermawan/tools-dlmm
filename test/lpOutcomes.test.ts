@@ -121,6 +121,9 @@ describe("cohort from the database", () => {
     db.insert("lp_position_sightings", { position: "q1", pool: "Q", wallet: "W2", first_seen_at: T0, last_seen_at: T0 + HOUR, new_in_scan: 1 });
     expect(loadCohort(db, { pools: ["P"] }).rows.map((r) => r.position).sort()).toEqual(["a", "b"]);
     expect(loadCohort(db, { since: T0 + 2 * HOUR }).rows.map((r) => r.position)).toEqual(["b"]);
+    expect(loadCohort(db, { until: T0 + 2 * HOUR }).rows.map((r) => r.position).sort()).toEqual(["a", "q1"]);
+    // the coverage line follows the same filters
+    expect(lpOutcomes(db, { until: T0 + 2 * HOUR, pools: ["P"] }).cohort).toMatchObject({ sightings: 1, pools: 1 });
   });
 });
 

@@ -220,7 +220,7 @@ export function writeSessionReport(db: Db, simSessionId: string, outDir = "repor
   md.push("");
   md.push("### Real positions that opened during the session, followed to closure");
   md.push("");
-  md.push(lpOutcomesMarkdown(lpOutcomes(db, { since: ds.start_at, minDepositUsd: 20 })));
+  md.push(lpOutcomesMarkdown(lpOutcomes(db, { since: ds.start_at, until: ds.end_at ?? Date.now(), minDepositUsd: 20 })));
   md.push("");
   md.push("## Score calibration");
   md.push("");

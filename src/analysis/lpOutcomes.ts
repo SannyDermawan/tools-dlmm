@@ -37,6 +37,8 @@ export interface LpOutcomesOptions {
   pools?: string[];
   /** only positions first seen at or after this time (ms) */
   since?: number;
+  /** ... and at or before this time (a session window: positions still open afterwards are followed anyway) */
+  until?: number;
   minDepositUsd?: number;
 }
 
@@ -69,6 +71,10 @@ export function loadCohort(db: Db, o: LpOutcomesOptions = {}): { rows: CohortRow
   if (o.since !== undefined) {
     where.push("s.first_seen_at >= ?");
     args.push(o.since);
+  }
+  if (o.until !== undefined) {
+    where.push("s.first_seen_at <= ?");
+    args.push(o.until);
   }
   if (o.pools?.length) {
     where.push(`s.pool IN (${o.pools.map(() => "?").join(",")})`);
@@ -236,8 +242,8 @@ export function lpOutcomes(db: Db, o: LpOutcomesOptions = {}): LpOutcomesReport 
   const km = kaplanMeier(rows.map((r) => ({ t: r.minutes, event: r.closed })));
   const maxObs = Math.max(0, ...rows.map((r) => r.minutes));
   const seen = db.get<{ a: number | null; b: number | null }>(
-    `SELECT MIN(first_seen_at) a, MAX(last_seen_at) b FROM lp_position_sightings WHERE new_in_scan = 1${o.since !== undefined ? " AND first_seen_at >= ?" : ""}`,
-    ...(o.since !== undefined ? [o.since] : []),
+    `SELECT MIN(first_seen_at) a, MAX(last_seen_at) b FROM lp_position_sightings s WHERE new_in_scan = 1${o.since !== undefined ? " AND first_seen_at >= ?" : ""}${o.until !== undefined ? " AND first_seen_at <= ?" : ""}${o.pools?.length ? ` AND pool IN (${o.pools.map(() => "?").join(",")})` : ""}`,
+    ...(o.since !== undefined ? [o.since] : []), ...(o.until !== undefined ? [o.until] : []), ...(o.pools ?? []),
   );
   return {
     cohort: {

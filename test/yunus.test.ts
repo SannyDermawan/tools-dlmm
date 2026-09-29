@@ -107,7 +107,7 @@ describe("yunus preset and screen (playbook point 3)", () => {
     mut?.(p);
     return p;
   };
-  const inputs = (o: Partial<YunusInputs> = {}): YunusInputs => ({ tvlUsd: 50_000, mintAuthority: false, freezeAuthority: false, mcapUsd: 8e6, tokenAgeHours: 100, athDrawdownPct: 40, ...o });
+  const inputs = (o: Partial<YunusInputs> = {}): YunusInputs => ({ tvlUsd: 50_000, category: "memecoin", riskIsBase: true, mintAuthority: false, freezeAuthority: false, mcapUsd: 8e6, tokenAgeHours: 100, athDrawdownPct: 40, ...o });
 
   it("the shipped preset loads; combos are widths x anchors x flip shapes x exits", () => {
     const p = preset();
@@ -124,6 +124,10 @@ describe("yunus preset and screen (playbook point 3)", () => {
     const p = preset();
     expect(evaluateYunus(p, inputs())).toEqual([]);
     expect(evaluateYunus(p, inputs({ tvlUsd: 5_000 }))).toEqual(["tvl"]);
+    expect(evaluateYunus(p, inputs({ category: "bluechip" }))).toEqual(["category"]);
+    expect(evaluateYunus(p, inputs({ riskIsBase: false }))).toEqual(["risk_token_not_base"]);
+    expect(evaluateYunus(p, inputs({ riskIsBase: null }))).toEqual(["risk_token_base:no_data"]);
+    expect(evaluateYunus(preset((x) => { x.screen.categories = []; x.screen.require_risk_token_base = false; }), inputs({ category: "bluechip", riskIsBase: false }))).toEqual([]);
     expect(evaluateYunus(p, inputs({ mintAuthority: true, freezeAuthority: true }))).toEqual(["mint_authority", "freeze_authority"]);
     expect(evaluateYunus(p, inputs({ mintAuthority: null }))).toEqual(["mint_authority:no_data"]);
     expect(evaluateYunus(preset((x) => (x.screen.missing_security = "allow")), inputs({ mintAuthority: null }))).toEqual([]);
@@ -204,7 +208,7 @@ const snapshot = (ts: number): BinSnapshot => {
   return { pool: "POOL", ts, slot: ts, activeId: 0, lower: -240, upper: 240, missingBinArrays: [], bins };
 };
 
-const runnerFor = (mut: (p: YunusPreset) => void, o: { ath?: number | null } = {}) => {
+const runnerFor = (mut: (p: YunusPreset) => void, o: { ath?: number | null; riskIsBase?: boolean } = {}) => {
   const c = structuredClone(loadConfig().config);
   c.grid.entry_modes = ["yunus_flip"];
   c.grid.max_positions = 1000;
@@ -220,7 +224,7 @@ const runnerFor = (mut: (p: YunusPreset) => void, o: { ath?: number | null } = {
     c, new Map([["POOL", sim]]),
     new SessionClock(0, { durationMinutes: 6000, warmupMinutes: 1, stopNewBeforeEndMinutes: 10, cohortIntervalMinutes: 0 }),
     undefined,
-    { book, yunus: preset, ath: () => o.ath ?? null, fridayInputs: () => ({ tvlUsd: 50_000, mintAuthority: false, freezeAuthority: false }) },
+    { book, yunus: preset, ath: () => o.ath ?? null, tokenInfo: () => ({ tokenAgeHours: 100, mcapUsd: 8e6, riskIsBase: o.riskIsBase ?? true }), fridayInputs: () => ({ tvlUsd: 50_000, mintAuthority: false, freezeAuthority: false }) },
   );
   return { c, sim, runner };
 };
@@ -335,6 +339,13 @@ describe("yunus_flip in the grid runner", () => {
     none.runner.onTick(MIN);
     expect(none.sim.list()).toHaveLength(0);
     expect(none.runner.stats.yunus.failed["ath:no_data"]).toBe(1);
+  });
+
+  it("a pool whose risk token is the quote side is not entered (nothing to flip)", () => {
+    const { sim, runner } = runnerFor(simple, { riskIsBase: false });
+    runner.onTick(MIN);
+    expect(sim.list()).toHaveLength(0);
+    expect(runner.stats.yunus.failed.risk_token_not_base).toBe(1);
   });
 
   it("the screen keeps a pool out, with the reason counted", () => {

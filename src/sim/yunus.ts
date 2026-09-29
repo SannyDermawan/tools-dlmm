@@ -14,6 +14,8 @@ const presetSchema = z
   .object({
     screen: z
       .object({
+        categories: z.array(z.string()).default(["memecoin"]),
+        require_risk_token_base: z.boolean().default(true),
         min_tvl_usd: optNum,
         min_mcap_usd: optNum,
         min_token_age_hours: optNum,
@@ -91,6 +93,10 @@ export function yunusCombos(pr: YunusPreset, exitLabel: (e: ScalarExitPolicy) =>
 
 export interface YunusInputs {
   tvlUsd: number | null;
+  /** pool category (memecoin / bluechip) */
+  category: string;
+  /** the risk token is the pool's base token X (the flip sells it on the way up); null = unknown */
+  riskIsBase: boolean | null;
   /** risk token authorities; null = no security row yet */
   mintAuthority: boolean | null;
   freezeAuthority: boolean | null;
@@ -104,6 +110,11 @@ export interface YunusInputs {
 export function evaluateYunus(pr: YunusPreset, x: YunusInputs): string[] {
   const s = pr.screen;
   const failed: string[] = [];
+  if (s.categories.length && !s.categories.includes(x.category)) failed.push("category");
+  if (s.require_risk_token_base) {
+    if (x.riskIsBase === null) failed.push("risk_token_base:no_data");
+    else if (!x.riskIsBase) failed.push("risk_token_not_base");
+  }
   const need = (name: string, v: number | null, ok: (v: number) => boolean) => {
     if (v === null) failed.push(`${name}:no_data`);
     else if (!ok(v)) failed.push(name);

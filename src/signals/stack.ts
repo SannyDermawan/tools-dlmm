@@ -87,7 +87,10 @@ export function buildDecisionStack(
       const token = m ? (bluechip.has(m.tokenX) ? (bluechip.has(m.tokenY) ? null : m.tokenY) : m.tokenX) : null;
       const a = token && audit ? audit(token, t) : null;
       const born = a ? (a.token_created_at ?? a.first_pool_at) : null;
-      return { tokenAgeHours: born !== null && born !== undefined ? Math.max(0, (t - born) / 3_600_000) : null, mcapUsd: a?.mcap_usd ?? null };
+      return {
+        tokenAgeHours: born !== null && born !== undefined ? Math.max(0, (t - born) / 3_600_000) : null, mcapUsd: a?.mcap_usd ?? null,
+        riskIsBase: m ? !bluechip.has(m.tokenX) : undefined,
+      };
     },
     expectedFeeUsd: (pool, valueUsd) => {
       const e = latestScore.get(pool)?.edge;

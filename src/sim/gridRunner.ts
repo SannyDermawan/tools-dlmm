@@ -231,7 +231,7 @@ export interface GridSignals {
   /** preset override (tests); default: loaded from config presets.meridian */
   preset?: MeridianPreset;
   /** risk token facts at t for the journal (coin selection dimensions in the report) */
-  tokenInfo?: (pool: string, t: number) => { tokenAgeHours: number | null; mcapUsd: number | null } | null;
+  tokenInfo?: (pool: string, t: number) => { tokenAgeHours: number | null; mcapUsd: number | null; /** the risk token is the base token X */ riskIsBase?: boolean } | null;
   /** highest price (pool quote units) seen up to t, only for pools whose risk token is the base (ath_drawdown_pct) */
   ath?: (pool: string, t: number) => number | null;
   /** one-minute flow of a pool at t (flow exits, Friday entry confirmation) */
@@ -693,7 +693,8 @@ export class GridRunner {
       if (!fi) continue;
       this.stats.yunus.evaluated++;
       const failed = evaluateYunus(pr, {
-        tvlUsd: fi.tvlUsd, mintAuthority: fi.mintAuthority, freezeAuthority: fi.freezeAuthority,
+        tvlUsd: fi.tvlUsd, category: sim.meta.category, riskIsBase: ti?.riskIsBase ?? null,
+        mintAuthority: fi.mintAuthority, freezeAuthority: fi.freezeAuthority,
         mcapUsd: ti?.mcapUsd ?? null, tokenAgeHours: ti?.tokenAgeHours ?? null, athDrawdownPct: px ? athDrawdownPct(px, ath) : null,
       });
       if (failed.length) {
