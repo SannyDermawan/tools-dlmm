@@ -496,7 +496,9 @@ time now enter the same way. At the time of the check, new DLMM pools were rare:
 with bin step 80–125, with base fees of 1% and 0.8%, not 2%.
 
 **Entry mode `friday_scalp`** (`presets/friday.yaml`, `src/sim/friday.ts`).
-- **Screen:** bin step 100, base fee exactly 2% (computed from base_factor × bin_step), age ≤ 6 h,
+- **Screen:** bin step 100, base fee 2% (computed from base_factor × bin_step; widened to a 1–3%
+  range on 2026-09-29 because no pool passed at exactly 2% in the live sessions — positions journal
+  `base_fee_pct`, so the report can still compare 1 / 2 / 3%), age ≤ 6 h,
   TVL ≥ $1k, no mint or freeze authority. A pool without a security row is skipped.
 - **Position:** Spot, two-sided, 34 + 1 + 34 bins, exit `scalp:ts15m:oor0m`.
 - **Re-entry:** a new scalp in the same pool 5 min after the previous one closed, up to 6 per pool.
