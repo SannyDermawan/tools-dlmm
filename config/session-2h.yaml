@@ -1,0 +1,15 @@
+# 2-hour session profile (laptop-friendly). Use: npm run dlmm -- -c config/session-2h.yaml session start -q
+extends: default
+session:
+  duration_minutes: 120
+  warmup_minutes: 15
+  stop_new_positions_before_end_minutes: 20
+  label: sesi-2jam
+grid:
+  cohort_interval_minutes: 30        # cohorts at +15, +45, +75 min
+collectors:
+  swap_stream:
+    credit_budget: 20000             # ~40% of the 5 h budget
+rpc:
+  quota:
+    session_credit_budget: 28000

@@ -1,0 +1,9 @@
+# Scheduled US macro events (blueprint 4.9): used only as a time filter (context multiplier),
+# never as a signal trigger. Update manually and VERIFY dates/times against the official
+# calendars (federalreserve.gov FOMC calendar, bls.gov CPI schedule) before relying on them.
+# Times are UTC (FOMC statements are 14:00 US Eastern = 18:00 UTC in winter, 19:00 UTC... check DST).
+# Import with:  npm run dlmm -- macro import
+events:
+  - { ts: "2026-10-28T18:00:00Z", name: "FOMC rate decision (verify)", impact: high }
+  - { ts: "2026-12-09T19:00:00Z", name: "FOMC rate decision (verify)", impact: high }
+  # - { ts: "2026-10-14T12:30:00Z", name: "US CPI (fill in from bls.gov)", impact: high }

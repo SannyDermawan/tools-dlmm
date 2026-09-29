@@ -1,0 +1,405 @@
+# DLMM Signal Engine + Simulator — default configuration.
+# All numbers here are STARTING POINTS to be calibrated from session results.
+# Every run records config_version = "<config_label>+<content hash>".
+
+config_label: v1.1.0
+
+app:
+  db_path: data/dlmm.sqlite
+  log_dir: logs
+  log_level: info            # trace | debug | info | warn | error
+  log_rotate:
+    frequency: daily         # daily | hourly
+    size: 50m
+    keep_files: 14
+  status_interval_seconds: 60
+
+rpc:
+  http_url_env: RPC_URL      # name of the env var, never the URL itself
+  ws_url_env: WS_URL
+  commitment: confirmed
+  max_rps: 3                 # critical collectors (pool state, bins, ecosystem); Helius Free = 10 rps total:
+                             # 3 (this) + swap_stream.max_rps 5 + token security 0.75 stays below it
+  max_concurrency: 4
+  request_timeout_ms: 20000
+  retry:
+    max_attempts: 5
+    base_delay_ms: 500
+    max_delay_ms: 15000
+  quota:
+    # Rough credit accounting to warn before the plan runs out.
+    credit_limit: 1000000
+    credits_used_before_session: 0
+    warn_at_pct: 80
+    session_credit_budget: 65000   # all RPC credits of one session; reaching it stops the swap stream
+    method_credits:
+      default: 1
+      getTransaction: 1
+      getMultipleAccounts: 1
+      getSignaturesForAddress: 1
+      getTokenLargestAccounts: 1
+  ws:
+    heartbeat_seconds: 20
+    reconnect_base_delay_ms: 1000
+    reconnect_max_delay_ms: 30000
+
+api:
+  meteora_base_url: https://dlmm.datapi.meteora.ag
+  max_rps: 10                # documented limit is ~30 rps; stay well below
+  request_timeout_ms: 20000
+  retry:
+    max_attempts: 5
+    base_delay_ms: 500
+    max_delay_ms: 15000
+  rugcheck_base_url: https://api.rugcheck.xyz/v1
+  rugcheck_max_rps: 1
+  dexscreener_base_url: https://api.dexscreener.com
+  coingecko_base_url: https://api.coingecko.com/api/v3
+  fear_greed_url: https://api.alternative.me/fng/
+  fx_url: https://open.er-api.com/v6/latest
+  defillama_base_url: https://api.llama.fi
+  defillama_stables_url: https://stablecoins.llama.fi
+  public_max_rps: 0.5          # shared limit for these free public APIs
+  jupiter:                     # token audit (phase 10), verified 2026-09-29
+    tokens_base_url: https://lite-api.jup.ag/tokens/v2        # official Tokens API V2, keyless host
+    keyed_tokens_base_url: https://api.jup.ag/tokens/v2       # used when JUPITER_API_KEY is set in .env
+    datapi_base_url: https://datapi.jup.ag/v1                 # UNOFFICIAL (jup.ag web app): bot holders,
+    use_datapi: true                                          # bundlers, fees; may change without notice
+    max_rps: 0.5
+    batch_size: 50                                            # mints per request (API max 100)
+
+discovery:
+  max_pools: 20
+  min_tvl_usd: 10000
+  min_volume_1h_usd: 5000
+  min_pool_age_minutes: 60
+  exclude_blacklisted: true
+  sort_by: volume_1h:desc
+  candidate_page_size: 200
+  include_categories: [memecoin, bluechip]
+  pool_allowlist: []         # always include these pool addresses
+  pool_denylist: []
+  recheck_params_minutes: 30 # re-read static pool params on chain
+
+categories:
+  # A pool is "bluechip" when BOTH tokens are in this list, otherwise "memecoin".
+  bluechip_tokens:
+    - So11111111111111111111111111111111111111112   # SOL
+    - EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v  # USDC
+    - Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB  # USDT
+    - J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn  # JitoSOL
+    - mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So   # mSOL
+    - jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZdosWBjx93v   # JupSOL
+    - bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1   # bSOL
+    - cbbtcf3aa214zXHbiAZQwf4122FBYbraNdFqgw4iMij   # cbBTC
+    - 3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh  # WBTC (wormhole)
+    - 7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs  # WETH (wormhole)
+  # Quote tokens whose USD price is ~1 when the API price is missing.
+  usd_stable_tokens:
+    - EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
+    - Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB
+
+collectors:
+  pool_state:                # lb_pair accounts on chain: active bin, volatility
+    enabled: true
+    interval_seconds: 5
+  bin_snapshot:              # bin arrays around the active bin (+ lb_pair, same slot)
+    enabled: true
+    interval_seconds: 30
+    bins_each_side: 70       # must cover the widest grid range + margin
+    keyframe_every: 20       # store every bin each Nth snapshot; in between only changed bins
+  pool_metrics:              # Meteora Data API: TVL, volume, fees, USD prices
+    enabled: true
+    interval_seconds: 60
+  swap_stream:               # logsSubscribe per pool + getTransaction per (sampled) swap tx
+    enabled: true
+    mode: sample             # sample: uniform random sample per pool (flow stats are ratios);
+                             # full: fetch every swap tx (needs a large RPC plan; memecoin pools see
+                             # hundreds of bot txs per second)
+    sample_per_minute: 8     # target sampled txs per pool per minute (1 credit each)
+    max_rps: 5               # separate budget: getTransaction bursts must not starve pool_state/bins
+    max_concurrency: 3
+    include_categories: [memecoin]  # swaps are fetched only for these pool categories (flow analysis
+                                    # matters most there; busy bluechip pools cost the most credits)
+    include_pools: []        # always stream these pools
+    exclude_pools: []        # never stream these pools
+    credit_budget: 50000     # max credits for swap stream calls per session (getTransaction + backfill)
+    pacing: true             # spread the budget evenly over the session instead of spending it early
+    pacing_burst_pct: 10     # may run this far (% of budget) ahead of the even pace
+    backfill_interval_seconds: 60
+    backfill_page_limit: 1000
+    max_queue: 5000
+    tx_concurrency: 3
+    dedupe_cache_size: 200000
+  ohlcv:
+    enabled: true
+    timeframes: [5m, 1h]     # the API does not provide 1m; 1m is derived from swaps later
+    interval_seconds: 300
+    warmup_hours: 24
+    refresh_lookback_minutes: 30
+  token_security:
+    enabled: true
+    interval_minutes: 60
+    skip_bluechip_holders: true   # skip getTokenLargestAccounts for bluechip tokens
+    use_rugcheck: true
+  token_audit:                     # Jupiter audit (phase 10): organic score, bot holders, launchpad, dev
+    enabled: true
+    interval_minutes: 15           # cache: one batch request per 15 min
+    pvp:                           # same symbol / name, other mint, traded in the last 24 h
+      enabled: true
+      min_rival_volume_24h_usd: 10000
+  ecosystem:
+    enabled: true
+    interval_seconds: 60
+    sol_price_pool: 5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6   # SOL-USDC DLMM, SOL/USD reference
+
+  # ---- P1/P2 sources (phase 7). Data is collected whenever enabled; it only affects the score
+  # when the matching scoring module is switched on (scoring.modules).
+  venues:                    # DexScreener: every pair of each risk token across DEXes
+    enabled: true
+    interval_seconds: 300
+  attention:                 # CoinGecko trending + DexScreener boosts / profile links
+    enabled: true
+    interval_seconds: 600
+  macro:                     # BTC, dominance, Fear & Greed, USD/IDR, DefiLlama Solana DEX volume / stablecoins,
+    enabled: true            # network TPS, new DLMM / launchpad pools per hour
+    interval_seconds: 600
+
+gaps:
+  watchdog_interval_seconds: 5
+  # A (source, pool) with no successful update for this long opens a data gap.
+  stale_after_seconds:
+    pool_state: 30
+    bin_snapshot: 120
+    pool_metrics: 300
+    swap_stream: 180
+    ohlcv: 900
+    ecosystem: 300
+    venues: 1200
+    attention: 1800
+    macro: 1800
+
+simulation:
+  virtual_capital_usd: 1000
+  entry_delay_seconds: 3
+  fee_attribution: accumulator     # accumulator | swap_events
+  starting_asset: quote            # quote: capital starts in quote token (balancing swap costs apply)
+                                   # as_needed: assume the needed tokens are already held
+  two_sided_x_value_fraction: auto # share of capital placed as X for two-sided positions;
+                                   # auto = ask-side bins / all bins (uniform value per bin for Spot)
+  exit_to: none                    # none | quote  (quote: swap X back to quote on close, cost applies)
+  fee_event_interval_seconds: 300  # how often a 'fee' event is journaled per position
+  pnl_eval_seconds: 30             # TP / SL / trailing / low-yield / variants evaluated this often
+  avoid_bin_array_init: false      # true: signal modes skip ranges that need a new bin array
+  max_bins_per_position: 1400      # POSITION_MAX_LENGTH in lb_clmm 0.12.0 (verify on upgrades)
+  costs:
+    base_fee_lamports_per_signature: 5000
+    signatures: { open: 2, close: 1, rebalance: 2, claim: 1, add: 1, swap: 1 }   # add: add liquidity (fee compounding)
+    compute_units: { open: 400000, close: 200000, rebalance: 600000, claim: 150000, add: 300000, swap: 300000 }
+    priority_fee_percentile: 75
+    priority_fee_floor_micro_lamports: 10000
+    tx_failure_rate: 0.05          # failed tx still pays base + priority fee
+    slippage_margin_pct: 0.3       # added on top of pool fee for balancing swaps
+    # Rent (lamports) — from @meteora-ag/dlmm constants; verify on SDK upgrades.
+    position_base_rent_sol: 0.05740608   # POSITION_FEE, 70-bin position
+    position_default_bins: 70
+    bins_per_tx: 70                      # wider positions need several transactions per operation
+    position_extra_bin_bytes: 112        # POSITION_BIN_DATA_SIZE
+    rent_lamports_per_byte: 6960
+    position_rent_refundable: true
+    bin_array_init_sol: 0.07143744       # BIN_ARRAY_FEE
+    bin_array_rent_refundable: false
+
+reconcile:
+  api_lag_minutes: 10              # ignore the newest API buckets (still filling)
+  tolerance_pct: 5
+
+session:
+  duration_minutes: 300
+  warmup_minutes: 15
+  stop_new_positions_before_end_minutes: 60
+  label: sesi-malam
+
+grid:
+  strategies: [spot, curve, bidask]
+  bins_per_side: [5, 10, 20, 35, 50]
+  sides: [two_sided, base_only, quote_only]
+  exit_policies:
+    - { type: hold_to_session_end }
+    - { type: exit_out_of_range, minutes: 15 }
+    - { type: rebalance_out_of_range, minutes: 15, max_rebalances: 3 }
+    - { type: exit_engine, minutes: 15, max_rebalances: 3 }   # blueprint 15 rules (see exit_engine)
+    # addendum v1.1 (phase 9): lists expand into several policies (trailing: trigger/drop paired)
+    - { type: take_profit, pct: [3, 5, 10] }
+    - { type: stop_loss, pct: [5, 10, 15] }
+    - { type: trailing_tp, trigger_pct: [2, 3, 5], drop_pct: [1, 1.5, 3], confirm_seconds: 15, tolerance_pct: 1 }
+    - { type: tp_sl_combo, tp_pct: 10, sl_pct: 10, trigger_pct: 3, drop_pct: 1.5 }
+    - { type: low_yield_exit, min_fee_pct_per_hour: 0.02, window_minutes: 30, min_age_minutes: 30 }
+  entry_modes: [all_pools_baseline, meridian_preset, signal_enter, signal_watch]
+  variants: [none, partial_harvest, fee_compounding, single_sided_reseed, wide_range]
+  variant_params:
+    partial_harvest: { trigger_return_pct: 10, fraction: 0.5 }     # withdraw 50% at +10% return
+    fee_compounding: { min_fee_usd: 5, every_minutes: 30 }         # re-add fees when >= $5 or every 30 min
+    single_sided_reseed: { max_reseeds: 3 }
+    wide_range: { bins_per_side: [69, 100, 150], strategy: spot }  # own widths; bins_per_side ignored
+  cooldown_enabled: [true, false] # signal modes run with and without pool cooldown (baseline: never)
+  sampling:                     # the full grid is huge: balanced random sample of combinations,
+    mode: balanced              # every level of every dimension appears ~equally; the same sample
+    max_combos: 180             # is used for every pool and entry mode (paired comparisons)
+    seed: 42
+  cohort_interval_minutes: 60   # open a new cohort of the whole grid every N minutes of the active
+                                # phase (0 = one cohort at the start of the active phase)
+  max_positions: 40000          # safety cap per session; lower it (or the grid) on a weak laptop
+
+weights_profile: v1_default
+
+presets:
+  meridian: presets/meridian.yaml   # second baseline (entry mode meridian_preset)
+
+memory:                          # pool / token memory across sessions (phase 10)
+  cooldown:
+    low_yield_hours: 4           # one low-yield close -> pool cooldown 4 h
+    oor_consecutive: 3           # 3 out-of-range closes in a row -> pool + token cooldown 12 h
+    oor_hours: 12
+    modes: [signal_enter]        # closes of these entry modes drive the cooldown
+  min_positions_for_features: 5  # pool history features need at least this many positions
+
+rug_detection:                   # auto blocklist (phase 10)
+  enabled: true
+  price_drop_pct: 50             # price falls >= 50% within the window ...
+  window_minutes: 15
+  lp_withdrawal_pct: 50          # ... together with >= 50% of the liquidity near the price withdrawn
+  dev_dump_pct: 50               # ... or the dev balance falling by >= 50% (Jupiter audit)
+
+# ---------------------------------------------------------------- Phase 4: features & scoring
+# Every number below is a starting hypothesis (blueprint 8-10) to be calibrated from the journal.
+scoring:
+  enabled: true
+  interval_seconds: 60
+  window_minutes: 60             # rolling window for flow / fee / LP-activity features
+  depth_bins: 5                  # k: active bin +- k for depth / crowding
+  max_age_seconds:               # older data counts as missing (freshness, blueprint 8.1)
+    pool_state: 30
+    bin_snapshot: 120
+    pool_metrics: 300
+    swaps: 900
+    security: 7200
+    ecosystem: 300
+    venues: 1200
+    attention: 1800
+    macro: 1800
+  normalization:
+    cross_weight: 0.5            # final = w * cross-sectional pct + (1-w) * own-history pct
+    min_history_points: 30       # below this only the cross-sectional rank is used
+    history_points: 1440         # own-history window per feature
+    winsor_pct: [1, 99]
+  features:
+    min_swap_coverage: 0.8       # flow features need >= 80% gap-free swap stream in the window
+    min_flow_samples: 20         # ... and at least this many sampled swaps in the window
+    min_price_minutes: 15        # realized vol / ER need this many 1-minute bars
+    er_minutes: 30               # N for efficiency ratio and trend_z
+    markout_seconds: 60
+    whale_swap_usd: 5000         # swaps at least this large count as whale flow
+  edge:
+    horizon_minutes: 120
+    paths: 200
+    drift_per_hour: 0            # GBM drift (0 = no directional view)
+    fee_offsets: 10              # pool fee profile tracked for |bin - active| <= this
+    max_score_if_nonpositive: 40
+    seed: 12345
+    capital_usd: 1000            # reference size for est_share / edge (= simulation capital)
+  regime:
+    er_low: 0.3                  # below: no direction
+    er_trend: 0.5                # above (and |trend_z| >= z_trend): trending
+    z_trend: 2
+    vol_high_per_hour: 0.02      # realized vol (log, per sqrt hour) above: volatile
+    vol_extreme_per_hour: 0.12   # above: chaos
+    scores: { sideways: 80, volatile_no_direction: 70, trending_up: 35, trending_down: 25, chaos: 0 }
+    sol_trend_penalty: 10        # subtracted when SOL itself trends strongly
+    btc_trend_penalty: 10        # ... and when BTC trends strongly (blueprint 9.3)
+    strategy_map:
+      sideways: { strategy: curve, sides: two_sided }
+      volatile_no_direction: { strategy: bidask, sides: two_sided }
+      trending_up: { strategy: bidask, sides: base_only }
+      trending_down: { strategy: bidask, sides: quote_only }
+      chaos: { strategy: spot, sides: two_sided }
+  safety_gate:
+    fail_on_mint_authority: true
+    fail_on_freeze_authority: true
+    max_top10_pct: 40
+    max_cluster_pct: 20
+    max_dev_rugs: 2              # dev_rug_count >= this fails
+    min_tvl_usd: 10000
+    max_transfer_fee_pct: 1
+    dead_token_market_cap_usd: 5000   # creator token below this = counted as rugged (proxy)
+    # ---- phase 10 (addendum v1.1)
+    max_bot_holders_pct: 30      # Jupiter bot holders > 30% -> GAGAL
+    fail_on_sus: true            # Jupiter audit.isSus present -> GAGAL
+    organic: { min_score: 50, penalty: 20 }   # organic score below min lowers the safety score
+    launchpad: { allow: [], block: [] }        # allow empty = any launchpad
+    token_age_hours: { min: null, max: null }  # null = no limit
+    pvp: { mode: penalty, penalty: 15 }        # penalty | fail | ignore (rival tokens, same symbol)
+    blocklist: true              # blocklisted token / dev -> GAGAL before features are computed
+    missing_data: { memecoin: fail, bluechip: lower_confidence }
+  context:
+    macro_window_minutes: 60
+    macro_multiplier: 0.6
+    priority_fee_p75_threshold: 1000000   # micro-lamports/CU
+    congestion_multiplier: 0.7
+    low_volume_hour_multiplier: 0.8
+    low_volume_hour_min_days: 7
+    low_volume_hour_ratio: 0.5   # hour volume < 50% of the pool's hourly mean
+    blocking_gap_sources: [pool_state, bin_snapshot, pool_metrics]
+    floor: 0.3                   # product of multipliers never below this (except blocking = 0)
+  modules:                       # modules can be switched off; weights are redistributed
+    edge: true
+    regime: true
+    flow: true
+    attention: false             # no social data source yet (P1-P2)
+    competition: true
+    safety: true
+  weights:
+    v1_default:
+      memecoin: { edge: 35, regime: 20, flow: 15, attention: 15, competition: 10, safety: 5 }
+      bluechip: { edge: 40, regime: 30, flow: 15, attention: 0, competition: 15, safety: 0 }
+  thresholds: { enter: 75, watch: 60 }
+  confidence:
+    min_for_enter: 0.5           # below: MASUK is downgraded to PANTAU
+
+# ---------------------------------------------------------------- Phase 5: signals & exit engine
+signals:
+  enter_action: MASUK            # entry mode signal_enter opens the grid where the latest signal is this
+  watch_action: PANTAU           # entry mode signal_watch
+  max_signal_age_seconds: 180    # older signals are ignored at entry time
+  size:                          # recommended share of capital (journaled; the demo keeps capital fixed)
+    base_fraction: 0.05
+    max_fraction: 0.10
+    watch_fraction: 0.02         # "PANTAU -> small size"
+
+exit_engine:                     # blueprint 15; applies to positions with exit policy exit_engine
+  min_age_minutes: 10            # rules based on fee / IL wait this long after opening
+  whale_sell_pct_supply: 2       # one wallet sold > X% of the risk token supply ...
+  whale_window_minutes: 10       # ... within this window (best effort: sampled swaps)
+  lp_withdrawal_pct: 30          # liquidity within +-k bins fell by more than X% ...
+  lp_window_minutes: 5           # ... within this window
+  lp_withdrawal_action: partial  # partial | exit
+  partial_fraction: 0.5
+  min_fee_pct_per_hour: 0.02     # position fee below X% of capital per hour ...
+  fee_window_minutes: 30         # ... over this window -> exit
+  il_fee_ratio: 1.5              # |IL| > fee x ratio -> exit ...
+  il_min_usd: 1                  # ... when |IL| is at least this large
+  regime_against: true           # exit when the regime turns trending_down while holding X
+  regime_min_x_share: 0.2        # "holding X" = X value share above this
+  rebalance_cost_check: true     # rebalance only if its cost < expected fee over the edge horizon
+
+# ---------------------------------------------------------------- Phase 8: calibration (blueprint 18.2)
+calibration:
+  entry_modes: [all_pools_baseline]   # learn from positions that ignore the signal (no selection bias)
+  min_sessions: 5                     # distinct data sessions (replays of the same data count once)
+  min_observations: 100               # pool-cohort observations per category
+  holdout_sessions: 1                 # newest data sessions, never used for fitting or selection
+  min_train_sessions: 2               # walk-forward: first fold trains on this many sessions
+  ridge_lambda: 1.0                   # L2 penalty on standardized module scores
+  selection_top_pct: 30               # "selected" = top X% of pool-cohorts by score (uplift metric)
+  min_spearman_gain: 0.0              # candidate must beat the current weights by at least this
+  missing_score: 50                   # a module without a score counts as neutral

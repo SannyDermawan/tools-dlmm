@@ -1,0 +1,36 @@
+# Meridian default rules (github.com/yunus-0x/meridian, README / CLAUDE.md, read 2026-09-29) as a
+# second baseline: entry mode `meridian_preset`. The project changes over time — re-check it.
+# Numbers are Meridian's defaults; each one is configurable here.
+pool_filter:
+  min_fee_active_tvl_pct: 0.05     # minFeeActiveTvlRatio 0.05: fee over `fee_window` / TVL near the active bin, in %
+                                   # (Meridian's exact unit is not documented unambiguously — verify)
+  fee_window: 5m                   # Meridian screens on 5-minute candles
+  min_tvl_usd: 10000
+  max_tvl_usd: 150000
+  min_volume_usd: 500              # over fee_window
+  min_bin_step: 80
+  max_bin_step: 125
+token_filter:
+  min_organic: 60                  # Jupiter organic score (phase 10); missing -> preset_parsial
+  min_holders: 500
+  min_mcap_usd: 150000
+  max_mcap_usd: 10000000
+  max_top10_pct: 60
+  max_bot_holders_pct: 30          # Jupiter audit (phase 10); missing -> preset_parsial
+  # minTokenFeesSol 30 (all-time fees in SOL) is not reproducible from our data: ignored.
+strategy:
+  shape: bidask
+  sides: quote_only                # one-sided SOL/quote below the price
+  bins_below: 69
+  min_bins_below: 35
+exit:
+  sl_pct: 15                       # README -15 (CLAUDE.md shows -50; addendum: use -15)
+  tp_fee_pct: 5                    # take profit when fees earned = 5% of capital
+  trigger_pct: 3                   # trailing take profit
+  drop_pct: 1.5
+  confirm_seconds: 15
+  tolerance_pct: 1
+  oor_minutes: 30                  # out of range for 30 min -> exit
+ranking:
+  # fee_tvl x 1000 + organic x 10 + volume / 100 + holders / 100; missing parts count as 0
+  top_n: 3                         # pools opened per cohort
