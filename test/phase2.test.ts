@@ -365,15 +365,25 @@ describe("PoolSimulator", () => {
     expect(r.ilUsd).toBeLessThan(0);
   });
 
-  it("gap during a position taints it", () => {
+  it("gap taint (rule from simulation.gap_taint, see test/gapTaint.test.ts): only a long gap or an action on stale data", () => {
     const { sim } = setup();
     sim.onState(state(0, 0));
     sim.onBins(snapshot(0, 0, 0n));
     const p = sim.request(pspec(), 0);
     sim.onState(state(3000, 0));
+    // a short bin_snapshot gap: fees are gap-proof (bin accumulators), the value follows the active bin
     sim.onGap({ source: "bin_snapshot", start: 10_000, end: 20_000 });
+    expect(p.gapTainted).toBe(false);
+    // swap_stream gaps are irrelevant in accumulator mode, however long
+    sim.onGap({ source: "swap_stream", start: 10_000, end: 20_000 + 10 * 60_000 });
+    expect(p.gapTainted).toBe(false);
+    // one gap longer than max_single_gap_minutes: exit rules could not react
+    sim.onGap({ source: "bin_snapshot", start: 30_000, end: 30_000 + 6 * 60_000 });
+    expect(p.gapTainted).toBe(false); // the gap only counts up to the position's life so far
+    sim.onState(state(30_000 + 6 * 60_000 + 1000, 0));
+    sim.close(p.id, "test", 30_000 + 6 * 60_000 + 1000);
     expect(p.gapTainted).toBe(true);
-    sim.onGap({ source: "swap_stream", start: 10_000, end: 20_000 }); // irrelevant in accumulator mode
+    expect(p.taint?.reason).toBe("long_gap");
   });
 
   it("swap_events mode attributes the LP fee of swaps through our bins", () => {
