@@ -162,6 +162,16 @@ export class Scorer {
     this.bluechip = new Set(d.config.categories.bluechip_tokens);
   }
 
+  /** A pool added during the session (fresh lane): new tracker, empty until its data arrives. */
+  addPool(m: PoolMeta, swapsCollected: boolean) {
+    if (this.trackers.has(m.pool)) return;
+    const sc = this.d.config.scoring;
+    const keep = Math.max(sc.window_minutes, sc.features.er_minutes, 90) * 60_000;
+    const tr = new PoolTracker(m, keep, sc.depth_bins, sc.edge.fee_offsets);
+    tr.swapsCollected = swapsCollected;
+    this.trackers.set(m.pool, tr);
+  }
+
   riskTokens(m: PoolMeta): string[] {
     return [m.tokenX, m.tokenY].filter((t) => !this.bluechip.has(t));
   }

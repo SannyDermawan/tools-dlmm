@@ -90,6 +90,11 @@ export class ScoringRunner {
     this.nextT = Math.ceil(startTs / iv) * iv;
   }
 
+  /** A pool added during the session (fresh lane). */
+  addPool(m: PoolMeta, swapsCollected: boolean) {
+    this.scorer.addPool(m, swapsCollected);
+  }
+
   /** Replay: score every decision time strictly before the event, then ingest it. */
   feed(e: ReplayEvent) {
     this.advanceTo(e.ts - 1);

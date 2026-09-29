@@ -14,6 +14,18 @@ export function backoffDelay(attempt: number, baseMs: number, maxMs: number, ran
   return Math.round(exp / 2 + rand() * (exp / 2));
 }
 
+/**
+ * Error text for logs. Node's fetch only says "fetch failed"; the network reason (ENOTFOUND = DNS,
+ * ECONNRESET, ETIMEDOUT, UND_ERR_CONNECT_TIMEOUT, ...) is in `cause`, so append it.
+ */
+export function errText(e: unknown): string {
+  const err = e as { message?: string; cause?: { code?: string; message?: string } };
+  const msg = err?.message ?? String(e);
+  const c = err?.cause;
+  const why = c?.code ?? c?.message;
+  return why && !msg.includes(why) ? `${msg} (${why})` : msg;
+}
+
 export class RetryableError extends Error {
   constructor(message: string, readonly retryAfterMs?: number) {
     super(message);

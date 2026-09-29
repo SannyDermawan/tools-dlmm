@@ -8,3 +8,4 @@ scratch/
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
+sesi.out

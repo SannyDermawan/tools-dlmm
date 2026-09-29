@@ -82,6 +82,14 @@ const median = (v: number[]) => {
 const mean = (v: number[]) => (v.length ? v.reduce((a, b) => a + b, 0) / v.length : null);
 
 /**
+ * A relative fee difference is only meaningful when the real fee is material: a position that
+ * earned $0.0001 turns a $0.02 simulator fee into +20,000%. Below this share of the deposit the
+ * check still counts in the percentage-point columns, which never blow up.
+ */
+export const MATERIAL_FEE_SHARE = 0.0001; // 0.01% of the deposit
+export const MATERIAL_FEE_MIN_USD = 0.01;
+
+/**
  * Addendum 4.3 (2): replay real, simple positions (one add, removed only at the close) whose whole
  * life lies inside one of our data sessions, with the same range, shape, sides and capital, and
  * compare fee and PnL. Simulator PnL is taken before costs (the Meteora PnL ignores tx fees and
@@ -188,19 +196,29 @@ export function runRealismChecks(db: Db, c: Config, o: { dataSessionId?: string;
  */
 export function realismSummary(db: Db, dataSessionId?: string, shapeKnown?: boolean) {
   const shapeCond = shapeKnown === undefined ? "" : `AND json_extract(k.spec, '$.combo.shape_known') = ${shapeKnown ? 1 : 0}`;
-  const rows = db.all<{ fee: number | null; pnl: number | null; after: number | null }>(
-    `SELECT fee_diff_pct fee, pnl_diff_pct pnl, pnl_after_costs_diff_pct after FROM sim_realism_checks k
+  const rows = db.all<{ fee: number | null; pnl: number | null; after: number | null; real_fee: number | null; sim_fee: number | null; deposit: number | null }>(
+    `SELECT fee_diff_pct fee, pnl_diff_pct pnl, pnl_after_costs_diff_pct after, real_fee_usd real_fee, sim_fee_usd sim_fee,
+            json_extract(k.spec, '$.capitalUsd') deposit
+     FROM sim_realism_checks k
      WHERE status = 'ok' ${shapeCond} ${dataSessionId ? "AND data_session_id = ?" : ""}
        AND id = (SELECT MAX(id) FROM sim_realism_checks k2 WHERE k2.real_position = k.real_position AND k2.status = 'ok')`,
     ...(dataSessionId ? [dataSessionId] : []),
   );
-  const fee = rows.map((r) => r.fee).filter((x): x is number => x !== null);
+  const material = (r: (typeof rows)[number]) =>
+    r.real_fee !== null && r.deposit !== null && r.real_fee >= Math.max(MATERIAL_FEE_MIN_USD, r.deposit * MATERIAL_FEE_SHARE);
+  const fee = rows.filter(material).map((r) => r.fee).filter((x): x is number => x !== null);
+  // fee difference in percentage points of the deposit: robust for tiny real fees
+  const feePp = rows
+    .filter((r) => r.real_fee !== null && r.sim_fee !== null && r.deposit)
+    .map((r) => ((r.sim_fee! - r.real_fee!) / r.deposit!) * 100);
   const pnl = rows.map((r) => r.pnl).filter((x): x is number => x !== null);
   const after = rows.map((r) => r.after).filter((x): x is number => x !== null);
   return {
     n: rows.length,
+    feeMaterialN: fee.length,
     feeDiffMedianPct: median(fee),
     feeDiffMeanAbsPct: mean(fee.map(Math.abs)),
+    feeDiffMeanAbsPp: mean(feePp.map(Math.abs)),
     pnlDiffMeanAbsPp: mean(pnl.map(Math.abs)),
     pnlDiffMeanPp: mean(pnl),
     afterCostsDiffMeanPp: mean(after),
@@ -223,11 +241,13 @@ export function realismMarkdown(db: Db, dataSessionId?: string): string {
   ];
   if (!all.n) out.push("No realism check yet (needs simple real positions whose whole life lies inside our data; run `dlmm lp realism`).");
   else {
-    out.push("| positions | checks | fee diff median | fee diff mean abs | PnL diff before costs (pp) | mean abs (pp) | PnL diff after costs (pp) | mean abs (pp) |\n|---|--:|--:|--:|--:|--:|--:|--:|");
+    out.push("| positions | checks | fee diff median (%) | fee diff mean abs (%) | fee diff mean abs (pp) | PnL diff before costs (pp) | mean abs (pp) | PnL diff after costs (pp) | mean abs (pp) |\n|---|--:|--:|--:|--:|--:|--:|--:|--:|");
     for (const [label, s] of [["shape known (headline)", realismSummary(db, dataSessionId, true)], ["shape unknown (run as spot)", realismSummary(db, dataSessionId, false)]] as const) {
       if (!s.n) continue;
-      out.push(`| ${label} | ${s.n} | ${f(s.feeDiffMedianPct)}% | ${f(s.feeDiffMeanAbsPct)}% | ${f(s.pnlDiffMeanPp, 2)} | ${f(s.pnlDiffMeanAbsPp, 2)} | ${f(s.afterCostsDiffMeanPp, 2)} | ${f(s.afterCostsDiffMeanAbsPp, 2)} |`);
+      out.push(`| ${label} | ${s.n} | ${f(s.feeDiffMedianPct)}% (n=${s.feeMaterialN}) | ${f(s.feeDiffMeanAbsPct)}% | ${f(s.feeDiffMeanAbsPp, 3)} | ${f(s.pnlDiffMeanPp, 2)} | ${f(s.pnlDiffMeanAbsPp, 2)} | ${f(s.afterCostsDiffMeanPp, 2)} | ${f(s.afterCostsDiffMeanAbsPp, 2)} |`);
     }
+    out.push("");
+    out.push(`Fee % columns use only checks whose real fee is at least ${MATERIAL_FEE_SHARE * 100}% of the deposit (and $${MATERIAL_FEE_MIN_USD}); smaller fees make relative differences meaningless. The pp columns use every check.`);
     out.push("");
     out.push("Diff = simulator minus real, in percentage points of the deposit. Before costs: the Meteora PnL has no tx fees or rent. After costs: both sides pay the same open / close transactions, the simulator also its composition fee; no balancing swap (real LPs deposit what they hold). Positions with an unknown shape run as spot.");
   }

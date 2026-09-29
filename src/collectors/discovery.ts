@@ -45,6 +45,48 @@ export function selectCandidates(pools: ApiPool[], c: Config, now = Date.now()):
   return [...allowed, ...rest].map((x, i) => ({ ...x, rank: i + 1 }));
 }
 
+/**
+ * Fresh lane (Friday playbook, pure / unit-tested): memecoin pools created in the last
+ * max_age_minutes with a listed bin step and a base fee in range, ranked by 1 h volume. `taken`
+ * holds pools already monitored; `slots` caps how many are returned.
+ */
+export function selectFresh(pools: ApiPool[], c: Config, taken: Set<string>, slots: number, now = Date.now()): DiscoveryCandidate[] {
+  const f = c.discovery.fresh_lane;
+  const deny = new Set(c.discovery.pool_denylist);
+  const out: DiscoveryCandidate[] = [];
+  for (const p of [...pools].sort((a, b) => (b.volume?.["1h"] ?? 0) - (a.volume?.["1h"] ?? 0))) {
+    if (out.length >= slots) break;
+    if (taken.has(p.address) || deny.has(p.address) || out.some((x) => x.api.address === p.address)) continue;
+    if (c.discovery.exclude_blacklisted && p.is_blacklisted) continue;
+    const category = categorize(p.token_x.address, p.token_y.address, c.categories.bluechip_tokens);
+    if (category !== "memecoin") continue;
+    const age = p.created_at ? (now - p.created_at) / 60_000 : null;
+    if (age === null || age < f.min_age_minutes || age > f.max_age_minutes) continue;
+    if (!f.bin_steps.includes(p.pool_config.bin_step)) continue;
+    const fee = p.pool_config.base_fee_pct;
+    if (fee < f.min_base_fee_pct || fee > f.max_base_fee_pct) continue;
+    if ((p.tvl ?? 0) < f.min_tvl_usd || (p.volume?.["1h"] ?? 0) < f.min_volume_1h_usd) continue;
+    out.push({ api: p, category, rank: 0, reason: "fresh_lane" });
+  }
+  return out;
+}
+
+/** API query of the fresh lane: one request per bin step, filtered on creation time (ms). */
+export async function freshCandidates(api: MeteoraApi, c: Config, now = Date.now()): Promise<ApiPool[]> {
+  const f = c.discovery.fresh_lane;
+  const out: ApiPool[] = [];
+  for (const bs of f.bin_steps) {
+    const filters = [
+      `pool_created_at>=${Math.floor(now - f.max_age_minutes * 60_000)}`, `bin_step=${bs}`,
+      `tvl>=${f.min_tvl_usd}`, `volume_1h>=${f.min_volume_1h_usd}`,
+    ];
+    if (c.discovery.exclude_blacklisted) filters.push("is_blacklisted=false");
+    const page = await api.listPools({ pageSize: 50, sortBy: "volume_1h:desc", filterBy: filters.join(" && ") });
+    out.push(...page.data);
+  }
+  return out;
+}
+
 export function toPoolMeta(api: ApiPool, lb: LbPairState, category: PoolCategory): PoolMeta {
   return {
     pool: api.address,
@@ -114,8 +156,42 @@ export async function discoverPools(
   const page = await api.listPools({ pageSize: d.candidate_page_size, sortBy: d.sort_by, filterBy: filters.join(" && ") });
   const allow = d.pool_allowlist.length ? await fetchAllowlisted(api, d.pool_allowlist) : [];
   const candidates = selectCandidates([...allow, ...page.data], c);
-  log.info({ apiCandidates: page.data.length, apiTotal: page.total, selected: candidates.length }, "discovery candidates");
+  if (d.fresh_lane.enabled && d.fresh_lane.max_pools > 0) {
+    try {
+      const fresh = selectFresh(await freshCandidates(api, c), c, new Set(candidates.map((x) => x.api.address)), d.fresh_lane.max_pools);
+      candidates.push(...fresh.map((x, i) => ({ ...x, rank: candidates.length + i + 1 })));
+    } catch (e) {
+      log.warn({ err: (e as Error).message }, "fresh lane discovery failed (main lane only)");
+    }
+  }
+  log.info({ apiCandidates: page.data.length, apiTotal: page.total, selected: candidates.length, fresh: candidates.filter((x) => x.reason === "fresh_lane").length }, "discovery candidates");
+  return verifyAndStore(deps, sessionId, candidates);
+}
 
+/**
+ * Fresh lane during a session: new fresh pools not monitored yet, verified on chain and stored.
+ * The caller adds them to the collectors (see runner).
+ */
+export async function discoverFresh(
+  deps: { api: MeteoraApi; rpc: RpcClient; db: Db; log: Logger; config: Config },
+  sessionId: string | null,
+  taken: Set<string>,
+  slots: number,
+): Promise<PoolMeta[]> {
+  if (slots <= 0) return [];
+  const fresh = selectFresh(await freshCandidates(deps.api, deps.config), deps.config, taken, slots);
+  const base = deps.db.get<{ n: number }>("SELECT COALESCE(MAX(rank), 0) n FROM session_pools WHERE session_id = ?", sessionId ?? "")?.n ?? 0;
+  return verifyAndStore(deps, sessionId, fresh.map((x, i) => ({ ...x, rank: base + i + 1 })));
+}
+
+/** On-chain verification of candidates (lb_pair account) -> pools + session_pools. */
+async function verifyAndStore(
+  deps: { api: MeteoraApi; rpc: RpcClient; db: Db; log: Logger; config: Config },
+  sessionId: string | null,
+  candidates: DiscoveryCandidate[],
+): Promise<PoolMeta[]> {
+  const { rpc, db, log } = deps;
+  if (!candidates.length) return [];
   const { accounts } = await rpc.getMultipleAccounts(candidates.map((x) => x.api.address));
   const metas: PoolMeta[] = [];
   const now = Date.now();
@@ -153,6 +229,10 @@ export async function discoverPools(
             volume_1h: cand.api.volume?.["1h"],
             fee_tvl_1h: cand.api.fee_tvl_ratio?.["1h"],
             api_protocol_fee_pct: cand.api.pool_config.protocol_fee_pct,
+            base_fee_pct: cand.api.pool_config.base_fee_pct,
+            collect_fee_mode: cand.api.pool_config.collect_fee_mode,
+            age_minutes: cand.api.created_at ? (now - cand.api.created_at) / 60_000 : null,
+            launchpad: cand.api.launchpad ?? null,
           }),
         },
         "OR IGNORE",

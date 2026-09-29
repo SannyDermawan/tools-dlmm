@@ -19,6 +19,21 @@ export interface FeeInterval {
   /** existing liquidity (USD) by offset from the active bin at the start of the interval */
   depthByOffset: Map<number, number>;
   supplyChanges: number; // bins within +-k of active whose supply changed (LP add/remove)
+  /** swap volume (USD) in the interval: LP fee / LP fee rate (exact for every swap, sampled or not) */
+  volumeUsd?: number;
+  /**
+   * net USD value of token Y that swaps put into the pool (bins whose supply did not change, so LP
+   * adds / removes are excluded): > 0 = Y in, X bought. Friday's "net buy" at the pool level.
+   */
+  netYInUsd?: number;
+}
+
+/** Per-minute pool flow from the bin snapshots (Friday playbook, stage 2). */
+export interface MinuteFlow {
+  /** window end (ms); windows are (end - 60 s, end] */
+  end: number;
+  volumeUsd: number | null; // null = snapshots cover < 80% of the minute
+  netYInUsd: number | null;
 }
 
 export interface SwapObs {
@@ -139,9 +154,46 @@ export class PoolTracker {
         if (Math.abs(off) > this.feeOffsets) continue;
         depthByOffset.set(off, (depthByOffset.get(off) ?? 0) + binValueUsd(b, dy, yUsd));
       }
-      this.fees.push({ ts: s.ts, dtMs: s.ts - prev.ts, usd, byOffset, depthByOffset, supplyChanges: changes });
+      // pool flow of the interval: volume from the LP fee, net Y inflow from swap-only bins
+      let netY = 0;
+      for (const [id, c] of s.bins) {
+        const p = prev.bins.get(id);
+        if (!p || p.supply !== c.supply) continue;
+        netY += Number(c.y - p.y);
+      }
+      const rate = this.prices[this.prices.length - 1]?.feeRate ?? 0;
+      const lpRate = rate * (1 - this.meta.fee.protocolShare / 10_000);
+      const volumeUsd = lpRate > 0 ? usd / lpRate : undefined;
+      this.fees.push({
+        ts: s.ts, dtMs: s.ts - prev.ts, usd, byOffset, depthByOffset, supplyChanges: changes,
+        volumeUsd, netYInUsd: (netY / 10 ** dy) * yUsd,
+      });
     }
     this.trim(s.ts);
+  }
+
+  /**
+   * The last `n` one-minute windows ending at t (newest first). Snapshot intervals are assigned to
+   * the window holding their end time; a window is null when the intervals in it cover less than
+   * 80% of the minute (data gap).
+   */
+  minuteFlow(t: number, n = 3): MinuteFlow[] {
+    const out: MinuteFlow[] = [];
+    for (let i = 0; i < n; i++) {
+      const end = t - i * 60_000;
+      const start = end - 60_000;
+      let cover = 0, vol = 0, net = 0, ok = true;
+      for (const f of this.fees) {
+        if (f.ts <= start || f.ts > end) continue;
+        cover += f.dtMs;
+        if (f.volumeUsd === undefined || f.netYInUsd === undefined) ok = false;
+        vol += f.volumeUsd ?? 0;
+        net += f.netYInUsd ?? 0;
+      }
+      const full = ok && cover >= 48_000;
+      out.push({ end, volumeUsd: full ? vol : null, netYInUsd: full ? net : null });
+    }
+    return out;
   }
 
   onSwap(w: SwapRecord) {

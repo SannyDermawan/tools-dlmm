@@ -8,6 +8,7 @@ import type { PoolTracker } from "../features/tracker.ts";
 import type { PresetInputs } from "../sim/meridian.ts";
 import type { GridRunner, GridSignals } from "../sim/gridRunner.ts";
 import { ExitEngine } from "./exitEngine.ts";
+import { tokenFlowLookup } from "../collectors/tokenFlow.ts";
 import { SignalBook } from "./signalEngine.ts";
 import { PoolMemory } from "../features/memory.ts";
 import { RugDetector } from "../features/rugDetector.ts";
@@ -25,6 +26,8 @@ export interface DecisionStack {
   rugs: RugDetector;
   /** connect to a grid runner: every scoring round -> signals -> exit engine */
   attach(runner: GridRunner): void;
+  /** a pool added during the session (fresh lane) */
+  addPool(m: PoolMeta, swapsCollected: boolean): void;
 }
 
 /**
@@ -53,6 +56,7 @@ export function buildDecisionStack(
   const latestScore = new Map<string, ScoreResult>();
   const audit = c.collectors.token_audit.enabled ? auditLookup(db, (c.scoring.max_age_seconds.audit ?? 2700) * 1000) : null;
   const security = securityLookup(db, c.scoring.max_age_seconds.security * 1000);
+  const tokenFlow = c.collectors.token_flow.enabled ? tokenFlowLookup(db, c.collectors.token_flow.max_age_seconds * 1000) : null;
   const exitEngine = new ExitEngine(
     c,
     (pool) => scoring.scorer.trackers.get(pool),
@@ -77,6 +81,33 @@ export function buildDecisionStack(
       if (!e) return null;
       return (e.feeUsd * valueUsd) / c.scoring.edge.capital_usd;
     },
+    flow: (pool, t) => {
+      const tr = scoring.scorer.trackers.get(pool);
+      const m = metaOf.get(pool);
+      if (!tr || !m) return null;
+      const riskIsX = !bluechip.has(m.tokenX);
+      const token = riskIsX ? m.tokenX : !bluechip.has(m.tokenY) ? m.tokenY : null;
+      const tf = token && tokenFlow ? tokenFlow(token, t) : null;
+      const pair = (k: "holder_count" | "bundler_pct") =>
+        tf?.prev && tf.now[k] !== null && tf.prev[k] !== null ? { now: tf.now[k] as number, prev: tf.prev[k] as number } : null;
+      return {
+        t, minutes: tr.minuteFlow(t, 4), riskIsX, tvlUsd: tr.metrics?.tvlUsd ?? null,
+        holders: pair("holder_count"), bundlerPct: pair("bundler_pct"),
+      };
+    },
+    fridayInputs: (pool, t) => {
+      const tr = scoring.scorer.trackers.get(pool);
+      const m = metaOf.get(pool);
+      if (!tr || !m) return null;
+      const token = !bluechip.has(m.tokenX) ? m.tokenX : !bluechip.has(m.tokenY) ? m.tokenY : null;
+      const sec = token ? security(token, t) : null;
+      const auth = (v: number | null | undefined) => (v === null || v === undefined ? null : v === 1);
+      return {
+        tvlUsd: tr.metrics?.tvlUsd ?? null,
+        mintAuthority: token ? auth(sec?.mint_auth_active) : false,
+        freezeAuthority: token ? auth(sec?.freeze_auth_active) : false,
+      };
+    },
     presetInputs: (pool, t, sim, windowMinutes) => {
       const tr = scoring.scorer.trackers.get(pool);
       const m = metaOf.get(pool);
@@ -92,7 +123,11 @@ export function buildDecisionStack(
     book.onScores(results);
     if (results.length) runnerRef?.onScores(results[0].ts);
   };
-  return { scoring, book, exitEngine, gridSignals, latestScore, memory, rugs, attach: (r) => (runnerRef = r) };
+  const addPool = (m: PoolMeta, swapsCollected: boolean) => {
+    metaOf.set(m.pool, m);
+    scoring.addPool(m, swapsCollected);
+  };
+  return { scoring, book, exitEngine, gridSignals, latestScore, memory, rugs, attach: (r) => (runnerRef = r), addPool };
 }
 
 /**

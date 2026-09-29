@@ -57,7 +57,7 @@ export function parseJupiterToken(j: any, extra?: any): Row {
     dev_migrations: num(a.devMigrations),
     bot_holders_pct: num(a.botHoldersPercentage),
     bot_holders_count: num(a.botHoldersCount),
-    bundler_holding_pct: bundle && num(bundle.holdingPct) !== null ? num(bundle.holdingPct)! * 100 : null,
+    bundler_holding_pct: bundle ? num(bundle.holdingPct) : null, // already in % (checked live 2026-09-29: values up to 4.3)
     fees_sol: num(extra?.fees),
     // documented behaviour: audit.isSus is only present when the token was flagged
     is_sus: "isSus" in a ? 1 : 0,

@@ -7,10 +7,11 @@ import { createSession, finishSession, recoverUncleanSessions } from "../db/repo
 import { every, setEveryErrorHandler, sleep } from "../util/async.ts";
 import { EcosystemCollector, OhlcvCollector, PoolMetricsCollector } from "./apiCollectors.ts";
 import { BinSnapshotCollector, PoolStateCollector } from "./chainState.ts";
-import { discoverPools } from "./discovery.ts";
+import { discoverPools, discoverFresh } from "./discovery.ts";
 import { GapTracker } from "./gaps.ts";
 import { SwapBudget, SwapStreamCollector, swapStreamEnabled } from "./swapStream.ts";
 import { TokenSecurityCollector } from "./tokenSecurity.ts";
+import { TokenFlowCollector } from "./tokenFlow.ts";
 import { TokenAuditCollector } from "./tokenAudit.ts";
 import { RealLpCollector } from "./realLp.ts";
 import { AttentionCollector, MacroCollector, VenueCollector } from "./extraCollectors.ts";
@@ -43,6 +44,8 @@ export interface CollectionContext {
   ecosystem: EcosystemCollector | null;
   /** live data-health snapshot for dashboards */
   health: () => CollectionHealth;
+  /** set by the consumer: called for every pool the fresh lane adds during the session */
+  onPoolAdded?: (m: PoolMeta) => void;
 }
 
 export interface CollectionHealth {
@@ -198,7 +201,8 @@ export async function runCollection(app: AppContext, o: CollectOptions = {}): Pr
         swapsStored: swaps.stats.swapsStored, openGaps: gaps.openGaps(), httpCalls: usage.totalCalls, httpErrors: usage.totalErrors,
       };
     };
-    o.onReady?.({ sessionId, bus, pools: poolMap, gaps, usdPrices, ecosystem: eco, health });
+    const ctx: CollectionContext = { sessionId, bus, pools: poolMap, gaps, usdPrices, ecosystem: eco, health };
+    o.onReady?.(ctx);
 
     const tasks: Promise<unknown>[] = [];
     const guard = (name: string, p: Promise<unknown>) =>
@@ -240,7 +244,49 @@ export async function runCollection(app: AppContext, o: CollectOptions = {}): Pr
     // phase 11: real LP positions of other wallets (on-chain scans + Meteora Data API)
     if (c.real_lp.enabled) tasks.push(guard("real_lp", new RealLpCollector({ db, rpc: secRpc, api: api.http, config: c, log: slog, pools: poolMap, signal }).run(signal)));
     // phase 10: Jupiter token audit (organic score, bot holders, launchpad, dev, PVP)
-    if (cc.token_audit.enabled) tasks.push(guard("token_audit", new TokenAuditCollector({ db, log: slog, gaps, config: c, sessionId, pools: poolMap, usage, signal }).run(signal)));
+    const tokenAudit = cc.token_audit.enabled ? new TokenAuditCollector({ db, log: slog, gaps, config: c, sessionId, pools: poolMap, usage, signal }) : null;
+    if (tokenAudit) tasks.push(guard("token_audit", tokenAudit.run(signal)));
+    // Friday playbook stage 2: holders + bundler % per minute
+    if (cc.token_flow.enabled) tasks.push(guard("token_flow", new TokenFlowCollector({ db, log: slog, gaps, config: c, sessionId, pools: poolMap, usage, signal }).run(signal)));
+    // Friday playbook: fresh memecoin pools found during the session join every collector
+    const fl = c.discovery.fresh_lane;
+    if (fl.enabled && fl.max_added_per_session > 0) {
+      const fresh = new Set(
+        db.all<{ pool: string }>("SELECT pool FROM session_pools WHERE session_id = ? AND json_extract(discovery_json, '$.reason') = 'fresh_lane'", sessionId).map((r) => r.pool),
+      );
+      let added = 0;
+      tasks.push(guard("fresh_lane", every(fl.refresh_minutes * 60_000, signal, async () => {
+        const now = Date.now();
+        const young = [...fresh].filter((p) => {
+          const m = poolMap.get(p);
+          return m?.createdAt && now - m.createdAt <= fl.max_age_minutes * 60_000;
+        }).length;
+        const slots = Math.min(fl.max_pools - young, fl.max_added_per_session - added);
+        if (slots <= 0) return;
+        const metas = await discoverFresh({ api, rpc, db, log: slog, config: c }, sessionId, new Set(poolMap.keys()), slots);
+        for (const m of metas) {
+          poolMap.set(m.pool, m);
+          fresh.add(m.pool);
+          added++;
+          for (const src of [PoolStateCollector.SOURCE, BinSnapshotCollector.SOURCE, PoolMetricsCollector.SOURCE, OhlcvCollector.SOURCE]) gaps.register(src, m.pool);
+          const streamed = cc.swap_stream.enabled && swapStreamEnabled(m, cc.swap_stream);
+          if (streamed) swaps.addPool(m);
+          db.run(
+            "UPDATE session_pools SET discovery_json = json_set(COALESCE(discovery_json,'{}'), '$.swap_stream', json(?), '$.added_mid_session', json('true')) WHERE session_id = ? AND pool = ?",
+            streamed ? "true" : "false", sessionId, m.pool,
+          );
+          ctx.onPoolAdded?.(m);
+          slog.info({ pool: m.pool, name: m.name, binStep: m.binStep, ageMin: m.createdAt ? Math.round((now - m.createdAt) / 60_000) : null }, "fresh pool added");
+          if (!o.quiet) console.log(`fresh pool added: ${m.name} (${m.pool}) bin_step=${m.binStep}`);
+        }
+        if (metas.length) {
+          db.run("UPDATE sessions SET pool_count = ? WHERE session_id = ?", poolMap.size, sessionId);
+          const risk = metas.flatMap((m) => [m.tokenX, m.tokenY]).filter((t) => !new Set(c.categories.bluechip_tokens).has(t));
+          if (cc.token_security.enabled) void security.tick(risk).catch((e) => slog.warn({ err: (e as Error).message }, "fresh pool security check failed"));
+          if (tokenAudit) void tokenAudit.auditBatch(risk).catch((e) => slog.warn({ err: (e as Error).message }, "fresh pool audit failed"));
+        }
+      })));
+    }
     if (ws) tasks.push(guard("ws", ws.run()));
     tasks.push(every(c.gaps.watchdog_interval_seconds * 1000, signal, async () => gaps.check()));
     // stop requests from another process (`dlmm session stop`)

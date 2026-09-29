@@ -75,6 +75,18 @@ export async function runLiveSession(app: AppContext, o: LiveSessionOptions = {}
     stack?.attach(runner);
     if (stack) sink.onResult = (p, r) => safe("memory", () => stack.memory.onClose(p, r));
     decision = stack;
+    // fresh lane (Friday playbook): pools added during the session get a simulator and a tracker
+    ctx.onPoolAdded = (m) => safe("pool added", () => {
+      if (sims!.has(m.pool)) return;
+      const sim = new PoolSimulator(m, cfg, sink!);
+      const q = ctx.usdPrices.get(m.tokenY);
+      if (q) sim.onMarket({ quoteUsd: q.usd });
+      const eco = [...sims!.values()][0]?.market;
+      if (eco) sim.onMarket({ solUsd: eco.solUsd, priorityMicroLamports: eco.priorityMicroLamports });
+      sims!.set(m.pool, sim);
+      stack?.addPool(m, swapStreamEnabled(m, cfg.collectors.swap_stream));
+      runner?.onPoolAdded(m.pool);
+    });
     for (const [token, p] of ctx.usdPrices) for (const s of sims.values()) if (s.meta.tokenY === token) s.onMarket({ quoteUsd: p.usd });
     const s = sims;
     const r = runner;

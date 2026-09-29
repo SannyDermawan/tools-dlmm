@@ -37,7 +37,8 @@ swap stream falls behind and records data gaps.
 | `dlmm status [-s SESSION]` | per-pool row counts, data gaps, HTTP usage of a collection session |
 | `dlmm audit-swaps -p POOL [-s SESSION]` | independent completeness check of the swap stream |
 | `dlmm session start [-d MIN] [--max-pools N] [-l LABEL]` | full demo session: collect + grid of virtual positions + report |
-| `dlmm sim replay [-s SESSION] [--duration/--warmup/--stop-before/--cohort-interval] [--no-signals]` | same grid (+ scoring, signals, exit engine) on stored data |
+| `dlmm sim replay [-s SESSION] [--duration/--warmup/--stop-before/--cohort-interval] [--no-signals]` | same grid (+ scoring, signals, exit engine) on stored data (use `-c config/session-2h.yaml` to replay a 2 h session with its own timing) |
+| `dlmm sim retaint -s SESSION [--dry-run] [--mode any_overlap]` | re-evaluate which positions a data gap made unusable (`simulation.gap_taint`), then `dlmm report -s SESSION` |
 | `dlmm score [-s SESSION]` | features + scores on the decision grid over stored data (no look-ahead) |
 | `dlmm dashboard [--web] [-s SESSION]` | real-time status (terminal, or local web page on 127.0.0.1:8787) |
 | `dlmm session stop [-s SESSION]` | stop a running session cleanly from another terminal |
