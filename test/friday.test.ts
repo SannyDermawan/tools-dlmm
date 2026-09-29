@@ -90,7 +90,9 @@ describe("Friday preset screen", () => {
   });
   it("passes bin step 100 / 2% / fresh / deep enough / no authorities, and names each failure", () => {
     expect(evaluateFriday(p, META(), OK, NOW)).toEqual([]);
-    expect(evaluateFriday(p, META({ fee: { ...META().fee, baseFactor: 10000 } }), OK, NOW)).toEqual(["base_fee"]);
+    expect(evaluateFriday(p, META({ fee: { ...META().fee, baseFactor: 10000 } }), OK, NOW)).toEqual([]); // 1%: inside 1-3
+    expect(evaluateFriday(p, META({ fee: { ...META().fee, baseFactor: 5000 } }), OK, NOW)).toEqual(["base_fee"]); // 0.5%
+    expect(evaluateFriday(p, META({ fee: { ...META().fee, baseFactor: 40000 } }), OK, NOW)).toEqual(["base_fee"]); // 4%
     expect(evaluateFriday(p, META({ binStep: 80 }), OK, NOW)).toContain("bin_step");
     expect(evaluateFriday(p, META({ createdAt: NOW - 400 * MIN }), OK, NOW)).toEqual(["age"]);
     expect(evaluateFriday(p, META(), { ...OK, tvlUsd: null }, NOW)).toEqual(["tvl"]);

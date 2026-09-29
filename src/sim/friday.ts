@@ -12,7 +12,8 @@ const presetSchema = z
     pool_filter: z
       .object({
         bin_steps: z.array(z.number().int().min(1)).min(1),
-        base_fee_pct: z.array(z.number().positive()).min(1),
+        // base fee range in %; Friday uses 2, the default takes 1-3 because 2% pools are rare
+        base_fee_pct: z.object({ min: z.number().positive(), max: z.number().positive() }).strict(),
         max_age_minutes: z.number().positive(),
         min_tvl_usd: z.number().min(0),
       })
@@ -95,7 +96,7 @@ export function evaluateFriday(p: FridayPreset, m: PoolMeta, x: FridayInputs, t:
   if (m.category !== "memecoin") failed.push("category");
   if (!f.bin_steps.includes(m.binStep)) failed.push("bin_step");
   const fee = baseFeePct(m);
-  if (!f.base_fee_pct.some((v) => Math.abs(v - fee) < 1e-6)) failed.push("base_fee");
+  if (fee < f.base_fee_pct.min - 1e-9 || fee > f.base_fee_pct.max + 1e-9) failed.push("base_fee");
   if (!m.createdAt || t - m.createdAt > f.max_age_minutes * 60_000 || t < m.createdAt) failed.push("age");
   if (x.tvlUsd === null || x.tvlUsd < f.min_tvl_usd) failed.push("tvl");
   const s = p.safety;
