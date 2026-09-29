@@ -267,9 +267,14 @@ describe("yunus_flip in the grid runner", () => {
     expect(p.reseeds).toBe(0);
     // through the bottom: fully converted to the token -> flip above the new active bin
     sim.onState(state(4 * MIN, -80));
+    const before = sim.valuation(p).valueUsd;
+    expect(sim.xShare(p.id)!).toBeGreaterThan(0.99);
     runner.onTick(5 * MIN);
     expect(p.reseeds).toBe(1);
     expect(p.status).toBe("active");
+    // the flip only re-lays the same tokens above the price: value is conserved (costs are booked separately)
+    expect(sim.valuation(p).valueUsd).toBeCloseTo(before, 0);
+    expect(p.costs.some((c) => c.type === "tx_rebalance")).toBe(true);
     expect(p.lower).toBe(-80);
     expect(p.upper).toBe(-80 + 70);
     expect(runner.stats.yunus.flips).toBe(1);
@@ -281,6 +286,8 @@ describe("yunus_flip in the grid runner", () => {
     expect(p.status).toBe("closed");
     expect(p.closeReason).toBe("cycle_complete");
     expect(runner.stats.yunus.cycles).toBe(1);
+    // bought on the way down (bid-ask), sold on the way up (flip ask): the price only got back to entry + 10 bins
+    expect(sim.valuation(p).netPnlUsd).toBeGreaterThan(0);
   });
 
   it("no flip before the position is fully converted (price inside the range), and max_flips caps the re-flips", () => {

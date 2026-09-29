@@ -295,7 +295,7 @@ grid:
     # one minute later (checked every 30 s)
     - { type: flow_trigger, sets: [volume_avg3] }
     - { type: flow_trigger, sets: [volume], confirm_seconds: 60 }
-  entry_modes: [all_pools_baseline, meridian_preset, friday_scalp, signal_enter, signal_watch]
+  entry_modes: [all_pools_baseline, meridian_preset, friday_scalp, yunus_flip, signal_enter, signal_watch]
   variants: [none, partial_harvest, fee_compounding, single_sided_reseed, wide_range]
   variant_params:
     partial_harvest: { trigger_return_pct: 10, fraction: 0.5 }     # withdraw 50% at +10% return
