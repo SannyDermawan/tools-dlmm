@@ -268,6 +268,7 @@ describe("grid: pool cooldown dimension", () => {
     c.grid.variants = ["none"];
     c.grid.cooldown_enabled = [true, false];
     c.grid.entry_filter = ["none"];
+    c.grid.cooldown_min_session_minutes = 0; // the test session is 60 min
     const sink = new MemorySink();
     let n = 0;
     const sim = new PoolSimulator(meta("P"), c, sink, () => `P-${++n}`);

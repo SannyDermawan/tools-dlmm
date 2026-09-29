@@ -361,12 +361,42 @@ Against the API alone, 11/20 pools were within ±5% (window 19:15–20:00).
   `fallbacks: "default"`) or an OpenAI-compatible / local endpoint (temperature 0). Daily budget
   ($1) and hourly cap, cache per role + token + input, sanitized external text as data, strict
   schema validation (invalid output rejected, logged), every call in `llm_calls` (migration
-  `010_llm`), prompt version in the config. Roles: token social quality (safety feature), narrative
-  (attention feature; idle — no free post source), explainer for the briefing. `dlmm llm status`.
+  `010_llm`), prompt version in the config. Roles: token social quality (safety feature) and an
+  explainer for the briefing (a narrative role was removed later: no free post source). `dlmm llm status`.
   With / without LLM features: replay variant `config/variants/llm-on.yaml`.
 - Not called live (no API key here; every call costs money) — provider request shapes are tested
   with mocked HTTP. Tests: `test/phase13.test.ts` (18). 215 tests total.
 - Next per the addendum: after enough sessions, `dlmm calibrate` and `dlmm calibrate --source real_lp`.
+
+## Revisions after the cloud test runs (2026-09-29) ✅
+Evidence: sessions `c604212c` (15 min), `03902546` (30 min), `7cf8d3ff` (45 min), 8 pools each,
+Helius, 0 data gaps in the last two; realism checks against real LP positions of other wallets.
+1. **Swap cost from the aggregator.** Balancing / exit swaps were charged the DLMM pool fee + 0.3%;
+   they now use Jupiter round-trip quotes per pool (`SwapQuoteCollector`, every 5 min, $500,
+   one-way cost = 1 − √(returned / sent)), capped by the pool fee, fallback 0.5% when no fresh quote,
+   margin 0.1% (`simulation.costs.swap_model: aggregator`, `pool` keeps the old model). Stored in
+   `swap_quotes` and replayed. Live quotes: bluechip ≈ 0.000–0.003% (old model 0.01–0.1% + 0.3%),
+   memecoins 0.25–1.56% (pool fee 0.25–1.88%) — the big correction is on bluechip pools; memecoin
+   swaps really are expensive.
+2. **Realism after costs** (migration `011_costs_realism`): the replay runs without a balancing
+   swap (real LPs deposit what they hold); both sides pay the same open / close transactions.
+   One-sided ranges reaching past the price (or ending ≤ 3 bins before it) are replayed instead of
+   skipped. The headline uses positions whose shape was read on chain; unknown shapes are reported
+   apart. Result (25 known-shape positions): **fee median −8.5%, mean |diff| 9.9%; PnL −0.33 pp of
+   capital before costs, −0.34 pp after**. Unknown shapes replayed as spot: fee mean |diff| 162%.
+3. **Real LP scans every 5 min** (was 30; ~10 credits per pool per scan): more positions are seen
+   while open, so their shape is known.
+4. **Cooldown dimension only in sessions ≥ 120 min** (`grid.cooldown_min_session_minutes`); in the
+   short sessions it never triggered and only doubled the signal-mode positions.
+5. **Baseline uses the first 90 combinations** of the same balanced sample
+   (`grid.sampling.baseline_max_combos`); signal modes keep all 180 — lighter load, same pairing.
+6. **LLM narrative role removed** (no free post source); returns with a source.
+7. **Indicator entry filters on hold** (`grid.entry_filter: [none]`; code and features kept): in a
+   30-min session up to half of their evaluations had too few candles.
+Not changed on purpose: narrow ranges (5–10 bins) and stop-loss policies were worst in both short
+sessions, but two sessions (one −40% crash, one +9% pump) are not enough to drop grid levels —
+that decision is left to `dlmm analyze` / `dlmm calibrate` after ≥ 5 sessions of 2 h.
+Tests: `test/costs.test.ts` (4); 220 tests total.
 
 ## RPC: Helius Free + swap stream redesign (2026-09-29)
 - `.env` points to Helius (Free: 1M credits/month, 10 rps). Rate limits: critical 3 rps +

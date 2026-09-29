@@ -96,6 +96,7 @@ export async function runLiveSession(app: AppContext, o: LiveSessionOptions = {}
     );
     ctx.bus.on("eco", (e: EcoUpdate) => safe("eco", () => route({ kind: "eco", ...e })));
     ctx.bus.on("activity", (a: ActivityUpdate) => safe("activity", () => route({ kind: "activity", ...a }, false)));
+    ctx.bus.on("swapQuote", (q: { pool: string; ts: number; costPct: number }) => safe("swapquote", () => route({ kind: "swapquote", ...q }, false)));
     ctx.gaps.listener = (g) => safe("gap", () => route({ kind: "gap", ts: Date.now(), source: g.source, pool: g.pool, start: g.start, end: g.end }));
     if (sr) {
       scoreTimer = setInterval(() => safe("score", () => {

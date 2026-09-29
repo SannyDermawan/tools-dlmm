@@ -79,7 +79,6 @@ export const FEATURE_SPECS: FeatureSpec[] = [
   ]),
   // ---- phase 13.2: LLM features (conditional; only weighted when llm.use_in_scoring)
   { name: "llm_social_score", module: "safety", direction: 1, description: "LLM: social / web presence quality of the risk token (0-100)" },
-  { name: "llm_narrative_score", module: "attention", direction: 1, description: "LLM: organic attention / narrative fit (0-100; needs a post source)" },
   // ---- phase 11: real LP positions of other wallets
   { name: "smart_lp_present", module: "competition", direction: 1, description: "1 when a smart LP wallet (real positions) holds an open position in the pool" },
   { name: "smart_lp_count", module: "context", direction: 0, description: "smart LP wallets with an open position in the pool" },
@@ -316,7 +315,6 @@ export function computeFeatures(tr: PoolTracker, cx: ComputeContext): RawFeature
     return v.length ? Math.min(...v) : null; // worst risk token
   };
   set("llm_social_score", llmOf("llm_social_score"), 0);
-  set("llm_narrative_score", llmOf("llm_narrative_score"), 0);
   const ind = cx.indicators?.at(tr.meta.pool, t) ?? null;
   for (const tf of ["5m", "15m"]) {
     const s = ind?.[tf];

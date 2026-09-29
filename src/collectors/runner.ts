@@ -232,6 +232,11 @@ export async function runCollection(app: AppContext, o: CollectOptions = {}): Pr
         slog.warn({ err: (e as Error).message }, "llm layer not started");
       }
     }
+    // aggregator swap cost for the simulator (Jupiter round-trip quotes)
+    if (c.simulation.costs.swap_model === "aggregator") {
+      const { SwapQuoteCollector } = await import("./swapQuotes.ts");
+      tasks.push(guard("swap_quotes", new SwapQuoteCollector({ db, log: slog, config: c, sessionId, pools: poolMap, usdPrices, bus, usage, signal }).run(signal)));
+    }
     // phase 11: real LP positions of other wallets (on-chain scans + Meteora Data API)
     if (c.real_lp.enabled) tasks.push(guard("real_lp", new RealLpCollector({ db, rpc: secRpc, api: api.http, config: c, log: slog, pools: poolMap, signal }).run(signal)));
     // phase 10: Jupiter token audit (organic score, bot holders, launchpad, dev, PVP)

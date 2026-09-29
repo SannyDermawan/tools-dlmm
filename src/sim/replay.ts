@@ -12,10 +12,11 @@ export type ReplayEvent =
     }
   | { kind: "eco"; ts: number; solUsd: number | null; p50: number | null; p75: number | null; p90: number | null }
   | { kind: "gap"; ts: number; source: string; pool: string | null; start: number; end: number | null }
-  | { kind: "activity"; ts: number; pool: string; candidates: number; sampled: number };
+  | { kind: "activity"; ts: number; pool: string; candidates: number; sampled: number }
+  | { kind: "swapquote"; ts: number; pool: string; costPct: number };
 
 /** Replays of data at the same timestamp run in this order (state before bins before swaps). */
-const ORDER: Record<ReplayEvent["kind"], number> = { eco: 0, metrics: 1, gap: 2, state: 3, bins: 4, swap: 5, activity: 6 };
+const ORDER: Record<ReplayEvent["kind"], number> = { eco: 0, metrics: 1, swapquote: 1, gap: 2, state: 3, bins: 4, swap: 5, activity: 6 };
 
 /**
  * Rebuild bin snapshots from delta-encoded storage (keyframe = full window, else changed bins;
@@ -78,6 +79,12 @@ export interface ReplayOptions {
 /** All market events of a time window, merged in timestamp order. */
 export function loadReplay(db: Db, o: ReplayOptions): ReplayEvent[] {
   const ev: ReplayEvent[] = [];
+  // aggregator swap quotes (phase 10+ data; older sessions have none -> fallback cost)
+  for (const pool of o.pools)
+    for (const q of db.all<{ ts: number; c: number }>(
+      "SELECT ts, one_way_cost_pct c FROM swap_quotes WHERE pool = ? AND ts BETWEEN ? AND ? AND one_way_cost_pct IS NOT NULL ORDER BY ts", pool, o.from - 30 * 60_000, o.to,
+    ))
+      ev.push({ kind: "swapquote", ts: Math.max(q.ts, o.from), pool, costPct: q.c });
   for (const pool of o.pools) {
     for (const r of db.all<{ ts: number; slot: number; active_bin: number; price: number; volatility_accumulator: number; volatility_reference: number; index_reference: number; v_last_update_ts: number; total_fee_rate: number }>(
       "SELECT * FROM pool_snapshots WHERE pool = ? AND source = 'chain' AND ts BETWEEN ? AND ? ORDER BY ts", pool, o.from, o.to,

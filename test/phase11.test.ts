@@ -176,6 +176,10 @@ describe("realism spec (addendum 4.3)", () => {
     expect(realSpec(row({ open_active_bin: null }))).toEqual({ skip: "no pool state at open" });
     expect(realSpec(row({ open_active_bin: 150 }))).toEqual({ skip: "active bin outside a two-sided range" });
     expect(realSpec(row({ sides: "quote_only", lower_bin: 40, upper_bin: 80 }))).toEqual({ skip: "quote-only range detached from the price" });
+    // a quote-only range reaching past the price: the bins above the price stay empty
+    expect(realSpec(row({ sides: "quote_only", lower_bin: 31, upper_bin: 104 }))).toMatchObject({ spec: { binsBelow: 69, binsAbove: 0 } });
+    expect(realSpec(row({ sides: "quote_only", lower_bin: 31, upper_bin: 98 }))).toMatchObject({ spec: { binsBelow: 69 } }); // within tolerance
+    expect(realSpec(row({ sides: "base_only", lower_bin: 97, upper_bin: 120 }))).toMatchObject({ spec: { binsBelow: 0, binsAbove: 20 } });
   });
 });
 

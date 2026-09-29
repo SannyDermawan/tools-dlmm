@@ -57,6 +57,9 @@ export interface MarketContext {
   quoteUsd: number | null;
   solUsd: number | null;
   priorityMicroLamports: number | null;
+  /** aggregator one-way swap cost (%) of this pool and when it was quoted */
+  swapCostPct?: number | null;
+  swapQuoteTs?: number | null;
 }
 
 /** Sources whose gaps make a position's result unreliable for calibration. */
@@ -112,6 +115,23 @@ export class PoolSimulator {
     if (m.quoteUsd != null) this.market.quoteUsd = m.quoteUsd;
     if (m.solUsd != null) this.market.solUsd = m.solUsd;
     if (m.priorityMicroLamports != null) this.market.priorityMicroLamports = m.priorityMicroLamports;
+    if (m.swapCostPct != null) {
+      this.market.swapCostPct = m.swapCostPct;
+      this.market.swapQuoteTs = m.swapQuoteTs ?? this.now;
+    }
+  }
+
+  /**
+   * Fraction charged for a balancing / exit swap. aggregator model: the latest Jupiter round-trip
+   * quote (fresh within max_quote_age_minutes), else the fallback capped by the pool fee (the
+   * aggregator never routes worse than this pool); pool model: the DLMM pool fee.
+   */
+  swapRate(poolFeeRate: number): number {
+    const k = this.sim.costs;
+    if (k.swap_model === "pool") return poolFeeRate;
+    const q = this.market.swapCostPct;
+    const fresh = q != null && this.market.swapQuoteTs != null && this.now - this.market.swapQuoteTs <= k.aggregator.max_quote_age_minutes * 60_000;
+    return fresh ? Math.min(q! / 100, poolFeeRate) : Math.min(k.aggregator.fallback_cost_pct / 100, poolFeeRate);
   }
 
   onState(u: PoolStateUpdate) {
@@ -253,7 +273,7 @@ export class PoolSimulator {
     const ba = this.costs.binArrayInit(p.lower, p.upper, this.snap?.missingBinArrays ?? [], ctx);
     if (ba) items.push(ba);
     if (this.sim.starting_asset === "quote" && xFrac > 0) {
-      items.push(this.costs.txCost("swap", ctx), this.costs.swapCost(cap * xFrac, st.feeRateTotal));
+      items.push(this.costs.txCost("swap", ctx), this.costs.swapCost(cap * xFrac, this.swapRate(st.feeRateTotal)));
     }
     const activeL = p.liquidityAt(st.activeId);
     if (activeL > 0) {
@@ -320,7 +340,7 @@ export class PoolSimulator {
     const notional = Math.abs(heldXUsd - liquid * xFrac);
     const ctx = this.costCtx();
     let usd = this.costs.txCost("rebalance", ctx, binCount(r)).usd;
-    if (notional > 0.01) usd += this.costs.txCost("swap", ctx).usd + this.costs.swapCost(notional, st.feeRateTotal).usd;
+    if (notional > 0.01) usd += this.costs.txCost("swap", ctx).usd + this.costs.swapCost(notional, this.swapRate(st.feeRateTotal)).usd;
     const d = deltaRange(r);
     const ba = this.costs.binArrayInit(st.activeId + d.minDelta, st.activeId + d.maxDelta, this.snap?.missingBinArrays ?? [], ctx);
     if (ba) usd += ba.usd;
@@ -352,7 +372,7 @@ export class PoolSimulator {
     const ctx = this.costCtx();
     const items: CostItem[] = [this.costs.txCost("rebalance", ctx, binCount(r))];
     const notional = Math.abs(heldXUsd - targetXUsd);
-    if (notional > 0.01) items.push(this.costs.txCost("swap", ctx), this.costs.swapCost(notional, st.feeRateTotal));
+    if (notional > 0.01) items.push(this.costs.txCost("swap", ctx), this.costs.swapCost(notional, this.swapRate(st.feeRateTotal)));
     const ba = this.costs.binArrayInit(p.lower, p.upper, this.snap?.missingBinArrays ?? [], ctx);
     if (ba) items.push(ba);
     const activeL = p.liquidityAt(st.activeId);
@@ -398,7 +418,7 @@ export class PoolSimulator {
     const items: CostItem[] = [this.costs.txCost("close", this.costCtx(), p.upper - p.lower + 1)];
     if (this.sim.exit_to === "quote") {
       const xUsd = ((c.x * fraction) / 10 ** m.decimalsX) * st.priceUi * (this.market.quoteUsd ?? p.entryQuoteUsd);
-      if (xUsd > 0) items.push(this.costs.swapCost(xUsd, st.feeRateTotal, "exit_swap"));
+      if (xUsd > 0) items.push(this.costs.swapCost(xUsd, this.swapRate(st.feeRateTotal), "exit_swap"));
     }
     p.costs.push(...items);
     this.sink.event({
@@ -463,7 +483,7 @@ export class PoolSimulator {
     const ctx = this.costCtx();
     const bins = p.upper - p.lower + 1;
     const items: CostItem[] = [this.costs.txCost("claim", ctx, bins), this.costs.txCost("add", ctx, bins)];
-    if (notional > 0.01) items.push(this.costs.txCost("swap", ctx), this.costs.swapCost(notional, st.feeRateTotal));
+    if (notional > 0.01) items.push(this.costs.txCost("swap", ctx), this.costs.swapCost(notional, this.swapRate(st.feeRateTotal)));
     p.costs.push(...items);
     this.sink.event({
       positionId: p.id, ts, type: "compound",
@@ -547,7 +567,7 @@ export class PoolSimulator {
     const pre = this.valuation(p);
     if (this.sim.exit_to === "quote") {
       const xUsd = (pre.x / 10 ** this.meta.decimalsX) * st.priceUi * (this.market.quoteUsd ?? p.entryQuoteUsd);
-      if (xUsd > 0) exitCosts.push(this.costs.txCost("swap", ctx), this.costs.swapCost(xUsd, st.feeRateTotal, "exit_swap"));
+      if (xUsd > 0) exitCosts.push(this.costs.txCost("swap", ctx), this.costs.swapCost(xUsd, this.swapRate(st.feeRateTotal), "exit_swap"));
     }
     p.costs.push(...exitCosts);
     const v = this.valuation(p);

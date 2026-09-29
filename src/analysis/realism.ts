@@ -7,6 +7,9 @@ import { loadReplay } from "../sim/replay.ts";
 import { dispatch } from "../sim/replayRunner.ts";
 import type { Sides, Strategy } from "../config/schema.ts";
 
+/** Bins between a one-sided range and the price still counted as "at the price" (price moves between our snapshot and the open). */
+const DETACH_TOLERANCE = 3;
+
 export interface RealRow {
   position: string;
   pool: string;
@@ -39,14 +42,18 @@ export function realSpec(r: RealRow): { spec: PositionSpec } | { skip: string } 
     binsBelow = a - r.lower_bin;
     binsAbove = r.upper_bin - a;
   } else if (r.sides === "quote_only") {
-    // quote sits below the price; the range must reach the active bin (or the one below it)
-    if (r.upper_bin < a - 1 || r.upper_bin > a) return { skip: "quote-only range detached from the price" };
+    // quote can only sit at or below the price: bins of the range above it stay empty, so a range
+    // reaching past the price is replayed as [lower, active]. A range ending more than
+    // DETACH_TOLERANCE bins below the price (a limit-order-like deposit) is not replayable 1:1.
+    if (r.upper_bin < a - DETACH_TOLERANCE) return { skip: "quote-only range detached from the price" };
     binsBelow = a - r.lower_bin;
     binsAbove = 0;
+    if (binsBelow < 0) return { skip: "quote-only range above the price" };
   } else {
-    if (r.lower_bin > a + 1 || r.lower_bin < a) return { skip: "base-only range detached from the price" };
+    if (r.lower_bin > a + DETACH_TOLERANCE) return { skip: "base-only range detached from the price" };
     binsBelow = 0;
     binsAbove = r.upper_bin - a;
+    if (binsAbove < 0) return { skip: "base-only range below the price" };
   }
   return {
     spec: {
@@ -127,6 +134,8 @@ export function runRealismChecks(db: Db, c: Config, o: { dataSessionId?: string;
       const cfg = structuredClone(c);
       cfg.simulation.entry_delay_seconds = 0;
       cfg.simulation.exit_to = "none";
+      // real LPs deposit the tokens they hold: no balancing swap in the replay
+      cfg.simulation.starting_asset = "as_needed";
       // same token split as the real deposit when it is known
       if (r.sides === "two_sided" && r.deposit_x_usd !== null && r.deposit_usd > 0) cfg.simulation.two_sided_x_value_fraction = Math.min(1, Math.max(0, r.deposit_x_usd / r.deposit_usd));
       const sink = new MemorySink();
@@ -152,12 +161,18 @@ export function runRealismChecks(db: Db, c: Config, o: { dataSessionId?: string;
       }
       const out = sim.close(p.id, "realism_check", r.closed_at)!;
       const simPnl = out.netPnlUsd + out.costUsd; // before costs
+      // after costs: the real position paid the same open / close transactions (same bins, same
+      // priority fee); rent is refunded on both sides. Composition fees are only known for the sim.
+      const txUsd = p.costs.filter((x) => x.type === "tx_open" || x.type === "tx_close").reduce((s2, x) => s2 + x.usd, 0);
+      const realAfter = r.net_pnl_usd - txUsd;
+      const simAfter = out.netPnlUsd;
       const feeDiff = r.fee_usd > 0 ? ((out.feeUsd - r.fee_usd) / r.fee_usd) * 100 : null;
       const pnlDiffPp = ((simPnl - r.net_pnl_usd) / r.deposit_usd) * 100;
       db.insert("sim_realism_checks", {
         ts: now, real_position: r.position, pool: r.pool, data_session_id: s.session_id, spec: JSON.stringify(sp.spec),
         real_fee_usd: r.fee_usd, sim_fee_usd: out.feeUsd, fee_diff_pct: feeDiff, real_pnl_usd: r.net_pnl_usd, sim_pnl_usd: simPnl,
         pnl_diff_pct: pnlDiffPp, status: "ok", reason: null,
+        sim_pnl_after_costs_usd: simAfter, real_pnl_after_costs_usd: realAfter, pnl_after_costs_diff_pct: ((simAfter - realAfter) / r.deposit_usd) * 100,
       });
       res.checked++;
     }
@@ -166,27 +181,35 @@ export function runRealismChecks(db: Db, c: Config, o: { dataSessionId?: string;
   return res;
 }
 
-/** Aggregate of every stored check (latest per real position). */
-export function realismSummary(db: Db, dataSessionId?: string) {
-  const rows = db.all<{ fee: number | null; pnl: number | null }>(
-    `SELECT fee_diff_pct fee, pnl_diff_pct pnl FROM sim_realism_checks k
-     WHERE status = 'ok' ${dataSessionId ? "AND data_session_id = ?" : ""}
+/**
+ * Aggregate of the stored checks (latest per real position). `shapeKnown`: true = only positions
+ * whose distribution shape was read on chain (the headline), false = shape unknown (replayed as
+ * spot, which misprices one-sided bid-ask deposits badly), undefined = all.
+ */
+export function realismSummary(db: Db, dataSessionId?: string, shapeKnown?: boolean) {
+  const shapeCond = shapeKnown === undefined ? "" : `AND json_extract(k.spec, '$.combo.shape_known') = ${shapeKnown ? 1 : 0}`;
+  const rows = db.all<{ fee: number | null; pnl: number | null; after: number | null }>(
+    `SELECT fee_diff_pct fee, pnl_diff_pct pnl, pnl_after_costs_diff_pct after FROM sim_realism_checks k
+     WHERE status = 'ok' ${shapeCond} ${dataSessionId ? "AND data_session_id = ?" : ""}
        AND id = (SELECT MAX(id) FROM sim_realism_checks k2 WHERE k2.real_position = k.real_position AND k2.status = 'ok')`,
     ...(dataSessionId ? [dataSessionId] : []),
   );
   const fee = rows.map((r) => r.fee).filter((x): x is number => x !== null);
   const pnl = rows.map((r) => r.pnl).filter((x): x is number => x !== null);
+  const after = rows.map((r) => r.after).filter((x): x is number => x !== null);
   return {
     n: rows.length,
     feeDiffMedianPct: median(fee),
     feeDiffMeanAbsPct: mean(fee.map(Math.abs)),
     pnlDiffMeanAbsPp: mean(pnl.map(Math.abs)),
     pnlDiffMeanPp: mean(pnl),
+    afterCostsDiffMeanPp: mean(after),
+    afterCostsDiffMeanAbsPp: mean(after.map(Math.abs)),
   };
 }
 
 export function realismMarkdown(db: Db, dataSessionId?: string): string {
-  const s = realismSummary(db, dataSessionId);
+  const all = realismSummary(db, dataSessionId);
   const real = db.get<{ n: number; closed: number; simple: number }>(
     `SELECT COUNT(*) n, SUM(is_closed) closed, SUM(simple = 1) simple FROM real_lp_positions r
      ${dataSessionId ? "WHERE r.pool IN (SELECT pool FROM session_pools WHERE session_id = ?)" : ""}`,
@@ -198,12 +221,15 @@ export function realismMarkdown(db: Db, dataSessionId?: string): string {
     `Real LP positions stored${dataSessionId ? " (pools of this session)" : ""}: ${real.n} (${real.closed ?? 0} closed, ${real.simple ?? 0} simple). Wallets: ${smart.n} (${smart.smart ?? 0} smart LP).`,
     "",
   ];
-  if (!s.n) out.push("No realism check yet (needs simple real positions whose whole life lies inside our data; run `dlmm lp realism`).");
+  if (!all.n) out.push("No realism check yet (needs simple real positions whose whole life lies inside our data; run `dlmm lp realism`).");
   else {
-    out.push("| checks | fee diff median | fee diff mean abs | PnL diff mean (pp of capital) | PnL diff mean abs (pp) |\n|--:|--:|--:|--:|--:|");
-    out.push(`| ${s.n} | ${f(s.feeDiffMedianPct)}% | ${f(s.feeDiffMeanAbsPct)}% | ${f(s.pnlDiffMeanPp, 2)} | ${f(s.pnlDiffMeanAbsPp, 2)} |`);
+    out.push("| positions | checks | fee diff median | fee diff mean abs | PnL diff before costs (pp) | mean abs (pp) | PnL diff after costs (pp) | mean abs (pp) |\n|---|--:|--:|--:|--:|--:|--:|--:|");
+    for (const [label, s] of [["shape known (headline)", realismSummary(db, dataSessionId, true)], ["shape unknown (run as spot)", realismSummary(db, dataSessionId, false)]] as const) {
+      if (!s.n) continue;
+      out.push(`| ${label} | ${s.n} | ${f(s.feeDiffMedianPct)}% | ${f(s.feeDiffMeanAbsPct)}% | ${f(s.pnlDiffMeanPp, 2)} | ${f(s.pnlDiffMeanAbsPp, 2)} | ${f(s.afterCostsDiffMeanPp, 2)} | ${f(s.afterCostsDiffMeanAbsPp, 2)} |`);
+    }
     out.push("");
-    out.push("Diff = simulator minus real. Simulator PnL is before costs (the Meteora PnL ignores tx fees and rent). Positions with an unknown shape run as spot.");
+    out.push("Diff = simulator minus real, in percentage points of the deposit. Before costs: the Meteora PnL has no tx fees or rent. After costs: both sides pay the same open / close transactions, the simulator also its composition fee; no balancing swap (real LPs deposit what they hold). Positions with an unknown shape run as spot.");
   }
   return out.join("\n");
 }

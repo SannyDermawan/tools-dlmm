@@ -120,7 +120,7 @@ export function balancedSample(sizes: number[], n: number, seed: number): number
  * compared on identical combinations. wide_range uses its own shape and widths.
  * meridian_preset is not part of the grid (one fixed preset position per selected pool).
  */
-export function gridCombos(c: Config, opts: { allowSignalModes?: boolean } = {}): PositionSpec[] {
+export function gridCombos(c: Config, opts: { allowSignalModes?: boolean; sessionMinutes?: number } = {}): PositionSpec[] {
   const g = c.grid;
   const policies = expandExitPolicies(g.exit_policies);
   const filters = g.entry_filter;
@@ -128,10 +128,15 @@ export function gridCombos(c: Config, opts: { allowSignalModes?: boolean } = {})
   const sample = g.sampling.mode === "full" ? balancedSample(dims, Number.MAX_SAFE_INTEGER, 0) : balancedSample(dims, g.sampling.max_combos, g.sampling.seed);
   const wide = g.variant_params.wide_range;
   const modes = g.entry_modes.filter((m) => m !== "meridian_preset" && (opts.allowSignalModes || !SIGNAL_MODES.has(m)));
+  // cooldowns (4-12 h) cannot trigger in a short session: run signal modes without the dimension
+  const cooldownLevels = opts.sessionMinutes !== undefined && opts.sessionMinutes < g.cooldown_min_session_minutes ? [false] : g.cooldown_enabled;
+  // the baseline may use only the first baseline_max_combos of the same sample (a subset, so
+  // baseline vs signal comparisons stay on identical combinations)
+  const baseN = g.sampling.mode === "balanced" && g.sampling.baseline_max_combos !== null ? g.sampling.baseline_max_combos : sample.length;
   const out: PositionSpec[] = [];
   for (const entryMode of modes)
-    for (const cooldownEnabled of COOLDOWN_MODES.has(entryMode) ? g.cooldown_enabled : [null])
-    for (const [si, bi, di, pi, vi, fi] of sample) {
+    for (const cooldownEnabled of COOLDOWN_MODES.has(entryMode) ? cooldownLevels : [null])
+    for (const [si, bi, di, pi, vi, fi] of entryMode === "all_pools_baseline" ? sample.slice(0, baseN) : sample) {
       const entryFilter = filters[fi];
       const variant = g.variants[vi];
       const isWide = variant === "wide_range";
@@ -229,7 +234,7 @@ export class GridRunner {
     private readonly log?: Logger,
     private readonly signals?: GridSignals,
   ) {
-    this.combos = gridCombos(c, { allowSignalModes: !!signals });
+    this.combos = gridCombos(c, { allowSignalModes: !!signals, sessionMinutes: clock.t.durationMinutes });
     const skipped = signals ? [] : c.grid.entry_modes.filter((m) => SIGNAL_MODES.has(m));
     if (skipped.length) log?.warn({ skipped }, "entry modes need the decision stack; skipped (no signals wired)");
     if (signals && c.grid.entry_modes.includes("meridian_preset")) {

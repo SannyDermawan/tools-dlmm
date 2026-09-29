@@ -64,10 +64,10 @@ export class CostModel {
     return { type: "bin_array_init", sol, usd: sol * ctx.solUsd, refundable: this.c.bin_array_rent_refundable, detail: { arrays: [...need] } };
   }
 
-  /** Swapping `notionalUsd` through the pool: pool fee + pessimistic slippage margin. */
-  swapCost(notionalUsd: number, poolFeeRate: number, label = "balancing_swap"): CostItem {
-    const rate = poolFeeRate + this.c.slippage_margin_pct / 100;
-    return { type: label, usd: Math.abs(notionalUsd) * rate, refundable: false, detail: { notionalUsd, poolFeeRate, slippagePct: this.c.slippage_margin_pct } };
+  /** Swapping `notionalUsd` at `swapRate` (aggregator quote or pool fee, see PoolSimulator.swapRate) + slippage margin. */
+  swapCost(notionalUsd: number, swapRate: number, label = "balancing_swap"): CostItem {
+    const rate = swapRate + this.c.slippage_margin_pct / 100;
+    return { type: label, usd: Math.abs(notionalUsd) * rate, refundable: false, detail: { notionalUsd, swapRate, slippagePct: this.c.slippage_margin_pct, model: this.c.swap_model } };
   }
 
   /**

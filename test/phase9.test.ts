@@ -157,8 +157,13 @@ describe("balanced grid sampling", () => {
     expect(modes).toEqual(new Set(["all_pools_baseline", "signal_enter", "signal_watch"]));
     const key = (x: PositionSpec) => `${x.strategy}|${x.binsBelow}|${x.binsAbove}|${x.combo.exit_policy}|${x.variant}`;
     const base = combos.filter((x) => x.entryMode === "all_pools_baseline").map(key);
-    expect(base.length).toBeLessThanOrEqual(c.grid.sampling.max_combos);
-    for (const cd of c.grid.cooldown_enabled) expect(combos.filter((x) => x.entryMode === "signal_enter" && x.cooldownEnabled === cd).map(key)).toEqual(base);
+    expect(base.length).toBe(c.grid.sampling.baseline_max_combos);
+    // signal modes use the whole sample; the baseline its first baseline_max_combos (a subset)
+    for (const cd of c.grid.cooldown_enabled) {
+      const sig = combos.filter((x) => x.entryMode === "signal_enter" && x.cooldownEnabled === cd).map(key);
+      expect(sig.length).toBeLessThanOrEqual(c.grid.sampling.max_combos);
+      expect(sig.slice(0, base.length)).toEqual(base);
+    }
     expect(combos.filter((x) => x.entryMode === "all_pools_baseline").every((x) => x.cooldownEnabled === null)).toBe(true);
     const wide = combos.filter((x) => x.variant === "wide_range");
     expect(wide.length).toBeGreaterThan(0);
