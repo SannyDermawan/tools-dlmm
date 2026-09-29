@@ -92,6 +92,8 @@ export function runReplay(app: AppContext, o: ReplayRunOptions): ReplayRunResult
     : buildDecisionStack(db, cfg, app.configVersion, sessionId, metas, from, swapPoolsOf(db, src.session_id));
   const runner = new GridRunner(cfg, sims, clock, app.log, stack?.gridSignals);
   stack?.attach(runner);
+  // in-session cooldowns follow the replayed closes; replays never persist memory (not new data)
+  if (stack) sink.onResult = (p, r) => stack.memory.onClose(p, r);
   const events = loadReplay(db, {
     pools: metas.map((m) => m.pool), from, to,
     binSteps: new Map(metas.map((m) => [m.pool, m.binStep])),

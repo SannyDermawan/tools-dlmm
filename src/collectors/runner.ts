@@ -11,6 +11,7 @@ import { discoverPools } from "./discovery.ts";
 import { GapTracker } from "./gaps.ts";
 import { SwapBudget, SwapStreamCollector, swapStreamEnabled } from "./swapStream.ts";
 import { TokenSecurityCollector } from "./tokenSecurity.ts";
+import { TokenAuditCollector } from "./tokenAudit.ts";
 import { AttentionCollector, MacroCollector, VenueCollector } from "./extraCollectors.ts";
 import { MarketBus, type PoolMeta } from "./types.ts";
 
@@ -216,6 +217,8 @@ export async function runCollection(app: AppContext, o: CollectOptions = {}): Pr
     if (cc.venues.enabled) tasks.push(guard("venues", new VenueCollector(extraDeps).run(signal)));
     if (cc.attention.enabled) tasks.push(guard("attention", new AttentionCollector(extraDeps).run(signal)));
     if (cc.macro.enabled) tasks.push(guard("macro", new MacroCollector(extraDeps).run(signal)));
+    // phase 10: Jupiter token audit (organic score, bot holders, launchpad, dev, PVP)
+    if (cc.token_audit.enabled) tasks.push(guard("token_audit", new TokenAuditCollector({ db, log: slog, gaps, config: c, sessionId, pools: poolMap, usage, signal }).run(signal)));
     if (ws) tasks.push(guard("ws", ws.run()));
     tasks.push(every(c.gaps.watchdog_interval_seconds * 1000, signal, async () => gaps.check()));
     // stop requests from another process (`dlmm session stop`)

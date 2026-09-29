@@ -6,6 +6,8 @@ import { pickPriority } from "../sim/replayRunner.ts";
 import { FEATURE_SPECS } from "./compute.ts";
 import { Scorer, securityLookup, type ScoreResult } from "./scorer.ts";
 import { extraLookup } from "./extraLookup.ts";
+import type { MemoryView } from "./compute.ts";
+import { auditLookup, blocklistLookup, type BlocklistLookup } from "./safetyData.ts";
 
 /** Hour-of-day volume vs the pool's mean, from completed 1h candles before t (look-ahead safe). */
 export function hourlyVolumeRatioFn(db: Db, minDays: number) {
@@ -38,6 +40,8 @@ export function hourlyVolumeRatioFn(db: Db, minDays: number) {
  */
 export class ScoringRunner {
   readonly scorer: Scorer;
+  /** blocklist view (phase 10); invalidate() after an automatic addition */
+  readonly blocklist: BlocklistLookup;
   private nextT: number;
   scored = 0;
   onScores: ((r: ScoreResult[]) => void) | null = null;
@@ -52,7 +56,10 @@ export class ScoringRunner {
     private readonly persist = true,
     /** pools whose swap stream is collected (null = all) */
     swapPools: Set<string> | null = null,
+    /** pool memory / cooldowns (phase 10, optional) */
+    memory?: MemoryView,
   ) {
+    this.blocklist = blocklistLookup(db);
     const macro = db.all<{ ts: number; name: string }>("SELECT ts, name FROM macro_events");
     this.scorer = new Scorer({
       config: c,
@@ -65,6 +72,9 @@ export class ScoringRunner {
         attention: (c.scoring.max_age_seconds.attention ?? 1800) * 1000,
         macro: (c.scoring.max_age_seconds.macro ?? 1800) * 1000,
       }),
+      audit: c.collectors.token_audit.enabled ? auditLookup(db, (c.scoring.max_age_seconds.audit ?? 2700) * 1000) : undefined,
+      blocklist: this.blocklist,
+      memory,
     });
     if (swapPools) for (const [pool, tr] of this.scorer.trackers) tr.swapsCollected = swapPools.has(pool);
     const iv = c.scoring.interval_seconds * 1000;

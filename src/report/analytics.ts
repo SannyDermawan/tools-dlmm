@@ -238,7 +238,64 @@ export function groupComparisonMarkdown(g: { groups: GroupRow[]; selection: Sele
   } else out.push("No selector entries (meridian_preset / signal modes) in these sessions.");
   if (g.groups.some((r) => r.group === "meridian_preset" && r.partial > 0)) {
     out.push("");
-    out.push("meridian_preset ran as **preset_parsial**: organic score and bot-holder filters need the Jupiter audit (phase 10) and were skipped.");
+    out.push("Some meridian_preset positions ran as **preset_parsial**: a filter had no data (organic score / bot holders need the Jupiter audit, phase 10) and was skipped.");
   }
+  return out.join("\n");
+}
+
+/**
+ * Phase 10 section (addendum 3): pools removed per safety filter (from the journaled signals),
+ * signal modes with vs without the pool cooldown, automatic blocklist entries in the data window,
+ * and Jupiter audit coverage.
+ */
+export function safetyMemoryMarkdown(db: Db, simSessionId: string, dataSessionId: string, from: number, to: number): string {
+  const out: string[] = [];
+  const f = (v: number | null | undefined, d = 2) => (v === null || v === undefined ? "-" : v.toFixed(d));
+  const filters = db.all<{ filter: string; pools: number; signals: number }>(
+    `SELECT j.value filter, COUNT(DISTINCT s.pool) pools, COUNT(*) signals
+     FROM signals s, json_each(json_extract(s.payload, '$.safety_gate.filters')) j
+     WHERE s.session_id = ? GROUP BY j.value ORDER BY pools DESC`,
+    simSessionId,
+  );
+  const totalPools = db.get<{ n: number }>("SELECT COUNT(DISTINCT pool) n FROM signals WHERE session_id = ?", simSessionId)?.n ?? 0;
+  out.push(`**Pools removed per safety filter** (a pool counts once per filter; one pool can fail several; ${totalPools} pools scored):`);
+  out.push("");
+  if (filters.length) {
+    out.push("| filter | pools | signals vetoed |\n|---|--:|--:|");
+    for (const r of filters) out.push(`| ${r.filter} | ${r.pools} | ${r.signals} |`);
+  } else out.push("No pool was vetoed by a safety filter (or the session has no signals).");
+  out.push("");
+  const cd = db.all<{ mode: string; cooldown: number; n: number; win: number | null; net: number | null; total: number | null }>(
+    `SELECT p.entry_mode mode, p.cooldown_enabled cooldown, COUNT(*) n, AVG(r.net_pnl_usd > 0) win, AVG(r.net_pnl_pct) net, SUM(r.net_pnl_usd) total
+     FROM sim_positions p JOIN sim_results r USING(position_id)
+     WHERE p.session_id = ? AND p.status = 'closed' AND p.gap_tainted = 0 AND p.cooldown_enabled IS NOT NULL
+     GROUP BY p.entry_mode, p.cooldown_enabled ORDER BY p.entry_mode, p.cooldown_enabled DESC`,
+    simSessionId,
+  );
+  out.push("**Pool cooldown** (signal modes run with and without it on identical combinations; clean positions):");
+  out.push("");
+  if (cd.length) {
+    out.push("| entry mode | cooldown | positions | win | avg net % | total net $ |\n|---|---|--:|--:|--:|--:|");
+    for (const r of cd) out.push(`| ${r.mode} | ${r.cooldown ? "on" : "off"} | ${r.n} | ${r.win === null ? "-" : (r.win * 100).toFixed(0) + "%"} | ${f(r.net)} | ${f(r.total)} |`);
+  } else out.push("No signal-mode positions in this session.");
+  out.push("");
+  const rugs = db.all<{ kind: string; key: string; reason: string; added_at: number }>(
+    `SELECT 'token' kind, mint key, reason, added_at FROM blocklist_tokens WHERE source = 'auto_rug' AND added_at BETWEEN ? AND ?
+     UNION ALL SELECT 'dev', wallet, reason, added_at FROM blocklist_devs WHERE source = 'auto_rug' AND added_at BETWEEN ? AND ?
+     ORDER BY added_at`,
+    from, to, from, to,
+  );
+  out.push(`**Automatic blocklist** (rug detection) in the data window: ${rugs.length} entr${rugs.length === 1 ? "y" : "ies"}.`);
+  for (const r of rugs) out.push(`- ${new Date(r.added_at).toISOString().slice(0, 16)} ${r.kind} \`${r.key}\` — ${r.reason}`);
+  out.push("");
+  const au = db.get<{ tokens: number; ok: number; bot: number; organic: number }>(
+    `SELECT COUNT(DISTINCT token) tokens, COUNT(DISTINCT CASE WHEN error IS NULL THEN token END) ok,
+       COUNT(DISTINCT CASE WHEN bot_holders_pct IS NOT NULL THEN token END) bot, COUNT(DISTINCT CASE WHEN organic_score IS NOT NULL THEN token END) organic
+     FROM token_audit WHERE session_id = ?`,
+    dataSessionId,
+  );
+  out.push(au && au.tokens
+    ? `Jupiter audit: ${au.ok}/${au.tokens} risk tokens audited, organic score for ${au.organic}, bot holders for ${au.bot} (datapi, unofficial).`
+    : "Jupiter audit: no data in this data session (collected from phase 10 sessions on).");
   return out.join("\n");
 }

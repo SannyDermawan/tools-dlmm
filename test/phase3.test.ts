@@ -47,7 +47,8 @@ describe("grid", () => {
     expect(combos).toHaveLength(g.strategies.length * g.bins_per_side.length * g.sides.length * expandExitPolicies(g.exit_policies).length);
     expect(new Set(combos.map((x) => x.entryMode))).toEqual(new Set(["all_pools_baseline"]));
     // signal modes join with the decision stack; meridian_preset is not a grid mode
-    expect(gridCombos(c, { allowSignalModes: true })).toHaveLength(combos.length * 3);
+    // signal modes run once per cooldown setting (phase 10: with and without the pool cooldown)
+    expect(gridCombos(c, { allowSignalModes: true })).toHaveLength(combos.length * (1 + 2 * g.cooldown_enabled.length));
     const one = combos.find((x) => x.sides === "quote_only")!;
     expect(one.binsAbove).toBe(0);
     expect(combos.find((x) => x.sides === "base_only")!.binsBelow).toBe(0);

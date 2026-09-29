@@ -9,6 +9,9 @@ import type { PresetInputs } from "../sim/meridian.ts";
 import type { GridRunner, GridSignals } from "../sim/gridRunner.ts";
 import { ExitEngine } from "./exitEngine.ts";
 import { SignalBook } from "./signalEngine.ts";
+import { PoolMemory } from "../features/memory.ts";
+import { RugDetector } from "../features/rugDetector.ts";
+import { auditLookup, type AuditRow } from "../features/safetyData.ts";
 
 export interface DecisionStack {
   scoring: ScoringRunner;
@@ -16,6 +19,10 @@ export interface DecisionStack {
   exitEngine: ExitEngine;
   gridSignals: GridSignals;
   latestScore: Map<string, ScoreResult>;
+  /** pool memory / cooldowns (phase 10) */
+  memory: PoolMemory;
+  /** automatic rug detection -> blocklist (phase 10) */
+  rugs: RugDetector;
   /** connect to a grid runner: every scoring round -> signals -> exit engine */
   attach(runner: GridRunner): void;
 }
@@ -33,11 +40,18 @@ export function buildDecisionStack(
   startTs: number,
   swapPools: Set<string> | null,
 ): DecisionStack {
-  const scoring = new ScoringRunner(db, c, configVersion, sessionId, metas, startTs, true, swapPools);
-  const book = new SignalBook(db, c, sessionId, configVersion);
-  const latestScore = new Map<string, ScoreResult>();
   const bluechip = new Set(c.categories.bluechip_tokens);
   const metaOf = new Map(metas.map((m) => [m.pool, m]));
+  const riskTokensOf = (pool: string) => {
+    const m = metaOf.get(pool);
+    return m ? [m.tokenX, m.tokenY].filter((t) => !bluechip.has(t)) : [];
+  };
+  const memory = new PoolMemory(db, c, sessionId, (pool) => riskTokensOf(pool)[0] ?? null);
+  const scoring = new ScoringRunner(db, c, configVersion, sessionId, metas, startTs, true, swapPools, memory);
+  const rugs = new RugDetector(db, c, riskTokensOf, () => scoring.blocklist.invalidate());
+  const book = new SignalBook(db, c, sessionId, configVersion);
+  const latestScore = new Map<string, ScoreResult>();
+  const audit = c.collectors.token_audit.enabled ? auditLookup(db, (c.scoring.max_age_seconds.audit ?? 2700) * 1000) : null;
   const security = securityLookup(db, c.scoring.max_age_seconds.security * 1000);
   const exitEngine = new ExitEngine(
     c,
@@ -56,6 +70,7 @@ export function buildDecisionStack(
   const gridSignals: GridSignals = {
     book,
     exitEngine,
+    memory,
     expectedFeeUsd: (pool, valueUsd) => {
       const e = latestScore.get(pool)?.edge;
       if (!e) return null;
@@ -65,16 +80,18 @@ export function buildDecisionStack(
       const tr = scoring.scorer.trackers.get(pool);
       const m = metaOf.get(pool);
       if (!tr || !m) return null;
-      return presetInputsOf(tr, m, t, windowMinutes, c.scoring.depth_bins, sim.market.quoteUsd, bluechip, security);
+      return presetInputsOf(tr, m, t, windowMinutes, c.scoring.depth_bins, sim.market.quoteUsd, bluechip, security, audit);
     },
   };
   let runnerRef: GridRunner | null = null;
   scoring.onScores = (results) => {
     for (const r of results) latestScore.set(r.pool, r);
+    // blocks found now take effect from the next scoring round (added_at = t)
+    if (results.length) rugs.check(scoring.scorer.trackers.values(), results[0].ts);
     book.onScores(results);
     if (results.length) runnerRef?.onScores(results[0].ts);
   };
-  return { scoring, book, exitEngine, gridSignals, latestScore, attach: (r) => (runnerRef = r) };
+  return { scoring, book, exitEngine, gridSignals, latestScore, memory, rugs, attach: (r) => (runnerRef = r) };
 }
 
 /**
@@ -83,7 +100,7 @@ export function buildDecisionStack(
  *    falling back to the API hourly fee/TVL scaled to the window when accumulators do not cover it;
  *  - volume over the window: API 1h volume scaled to the window (we keep no 5-minute volume);
  *  - market cap: supply x token USD price (FDV proxy); holders / top-10 from token security;
- *  - organic score and bot holders need the Jupiter audit (phase 10): null -> preset_parsial.
+ *  - organic score and bot holders from the Jupiter audit (phase 10); null without it -> preset_parsial.
  */
 export function presetInputsOf(
   tr: PoolTracker,
@@ -94,6 +111,7 @@ export function presetInputsOf(
   quoteUsd: number | null,
   bluechip: Set<string>,
   security: (token: string, t: number) => SecurityRow | null,
+  audit: ((token: string, t: number) => AuditRow | null) | null = null,
 ): PresetInputs {
   const winMs = windowMinutes * 60_000;
   const met = tr.metrics;
@@ -113,6 +131,7 @@ export function presetInputsOf(
   const riskIsX = !bluechip.has(m.tokenX);
   const token = riskIsX ? m.tokenX : bluechip.has(m.tokenY) ? null : m.tokenY;
   const sec = token ? security(token, t) : null;
+  const au = token && audit ? audit(token, t) : null;
   const price = tr.prices.length ? tr.prices[tr.prices.length - 1].price : null;
   const tokenUsd = quoteUsd === null ? null : riskIsX ? (price === null ? null : price * quoteUsd) : quoteUsd;
   return {
@@ -120,11 +139,11 @@ export function presetInputsOf(
     tvlUsd: met?.tvlUsd ?? null,
     volumeUsd: met?.volume1h != null ? (met.volume1h * windowMinutes) / 60 : null,
     binStep: m.binStep,
-    organic: null,
-    holders: sec?.total_holders ?? null,
-    mcapUsd: sec?.supply_ui && tokenUsd !== null ? sec.supply_ui * tokenUsd : null,
-    top10Pct: sec?.top10_pct ?? null,
-    botHoldersPct: null,
+    organic: au?.organic_score ?? null,
+    holders: sec?.total_holders ?? au?.holder_count ?? null,
+    mcapUsd: sec?.supply_ui && tokenUsd !== null ? sec.supply_ui * tokenUsd : (au?.mcap_usd ?? null),
+    top10Pct: sec?.top10_pct ?? au?.top_holders_pct ?? null,
+    botHoldersPct: au?.bot_holders_pct ?? null,
     bluechip: token === null,
   };
 }

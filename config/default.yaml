@@ -288,6 +288,7 @@ scoring:
     venues: 1200
     attention: 1800
     macro: 1800
+    audit: 2700                  # Jupiter audit (refreshed every 15 min)
   normalization:
     cross_weight: 0.5            # final = w * cross-sectional pct + (1-w) * own-history pct
     min_history_points: 30       # below this only the cross-sectional rank is used

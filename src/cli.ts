@@ -398,6 +398,50 @@ macroCmd
     app.db.close();
   });
 
+const blockCmd = program.command("blocklist").description("token / dev blocklist (safety gate veto, phase 10)");
+blockCmd
+  .command("add")
+  .description("block a token mint or a dev wallet")
+  .argument("<kind>", "token | dev")
+  .argument("<address>", "mint or wallet")
+  .requiredOption("-r, --reason <text>", "why")
+  .action(async (kind: string, address: string, opts) => {
+    if (kind !== "token" && kind !== "dev") throw new Error("kind must be token or dev");
+    const app = createApp(cfgPath());
+    const { addBlock } = await import("./features/safetyData.ts");
+    console.log(addBlock(app.db, kind, address, opts.reason, "manual") ? `blocked ${kind} ${address}` : `${kind} ${address} is already blocked`);
+    app.db.close();
+  });
+blockCmd
+  .command("remove")
+  .description("unblock (soft delete: replays of older sessions keep the entry)")
+  .argument("<kind>", "token | dev")
+  .argument("<address>", "mint or wallet")
+  .action(async (kind: string, address: string) => {
+    if (kind !== "token" && kind !== "dev") throw new Error("kind must be token or dev");
+    const app = createApp(cfgPath());
+    const { removeBlock } = await import("./features/safetyData.ts");
+    console.log(`${removeBlock(app.db, kind, address)} entr(ies) removed`);
+    app.db.close();
+  });
+blockCmd
+  .command("list")
+  .description("active entries (--all: removed ones too)")
+  .option("--all", "include removed entries")
+  .action(async (opts) => {
+    const app = createApp(cfgPath());
+    const where = opts.all ? "" : "WHERE removed_at IS NULL";
+    for (const [kind, table, col] of [["token", "blocklist_tokens", "mint"], ["dev", "blocklist_devs", "wallet"]] as const) {
+      const rows = app.db.all<{ key: string; reason: string; source: string; added_at: number; removed_at: number | null }>(
+        `SELECT ${col} key, reason, source, added_at, removed_at FROM ${table} ${where} ORDER BY added_at`,
+      );
+      console.log(`${kind}s: ${rows.length}`);
+      for (const r of rows)
+        console.log(`  ${r.key}  ${r.source.padEnd(8)} ${new Date(r.added_at).toISOString()}${r.removed_at ? ` removed ${new Date(r.removed_at).toISOString()}` : ""}  ${r.reason}`);
+    }
+    app.db.close();
+  });
+
 program
   .command("calibrate")
   .description("fit module weights from the journal, validate walk-forward + holdout, write a new config_version if it is better")

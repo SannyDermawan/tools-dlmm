@@ -164,14 +164,14 @@ export class Scorer {
     this.eco.assertNotAfter(t);
     const raw = new Map<string, RawFeatures>();
     // blocklist first (addendum 3.2): blocked pools skip the expensive feature computation
-    const blocked = new Map<string, BlockHit[]>();
+    const blockedPools = new Map<string, BlockHit[]>();
     for (const [pool, tr] of this.trackers) {
       const hits = this.blockHits(tr.meta, t);
-      if (hits.length && sc.safety_gate.blocklist) blocked.set(pool, hits);
+      if (hits.length && sc.safety_gate.blocklist) blockedPools.set(pool, hits);
     }
     for (const [pool, tr] of this.trackers) {
       tr.assertNotAfter(t); // explicit look-ahead check
-      if (blocked.has(pool)) continue;
+      if (blockedPools.has(pool)) continue;
       raw.set(pool, computeFeatures(tr, {
         config: c, t, eco: this.eco, security: this.d.security, macroEvents: this.d.macroEvents, riskTokens: this.riskTokens(tr.meta),
         extra: this.d.extra, audit: this.d.audit, memory: this.d.memory,
@@ -182,7 +182,7 @@ export class Scorer {
     // edge candidates per pool (needs regime for the strategy choice)
     const edges = new Map<string, { best: EdgeResult | null; all: EdgeResult[]; regime: RegimeLabel | null }>();
     for (const [pool, tr] of this.trackers) {
-      if (blocked.has(pool)) continue;
+      if (blockedPools.has(pool)) continue;
       const f = raw.get(pool)!;
       const regime = regimeLabel(f, sc.regime);
       edges.set(pool, { ...this.edgeFor(tr, f, regime, t), regime });
@@ -192,7 +192,7 @@ export class Scorer {
     const out: ScoreResult[] = [];
     for (const [pool, tr] of this.trackers) {
       const m = tr.meta;
-      const hits = blocked.get(pool);
+      const hits = blockedPools.get(pool);
       if (hits) {
         out.push(this.blockedResult(pool, m.category, t, hits));
         continue;

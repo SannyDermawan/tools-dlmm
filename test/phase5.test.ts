@@ -41,7 +41,7 @@ function score(pool: string, ts: number, action: "MASUK" | "PANTAU" | "LEWATI", 
     edge: null, edgeCandidates: [],
     recommendation: { strategy: "spot", sides: "two_sided", bins_below: 2, bins_above: 2, price_min: 0.98, price_max: 1.02 },
     expectations: { net_return_per_hour_pct: 0.4, fee_il_ratio: 2, p_in_range: 0.7, horizon_minutes: 120 },
-    topReasons: ["x"], ...o,
+    topReasons: ["x"], risks: [], ...o,
   };
 }
 
@@ -170,7 +170,8 @@ describe("grid runner with signals", () => {
     expect(a.spec.combo.signal_action).toBe("MASUK");
     expect(a.spec.combo.matches_recommendation).toBe(true);
     expect(by("all_pools_baseline").find((p) => p.pool === "C")!.spec.combo.signal_action).toBe("LEWATI");
-    expect(runner.stats.signalEntries).toEqual({ signal_enter: 2, signal_watch: 2 });
+    // x2: signal modes run with and without the pool cooldown (grid.cooldown_enabled)
+    expect(runner.stats.signalEntries).toEqual({ signal_enter: 4, signal_watch: 4 });
   });
 
   it("exit_engine positions skip a rebalance that costs more than the expected fee", () => {

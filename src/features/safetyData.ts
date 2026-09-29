@@ -57,7 +57,7 @@ export interface BlockHit {
 
 /**
  * Blocklist lookup at time t: entries added at or before t and not removed by t, so replays of
- * older sessions are not changed by later additions. Tables are tiny; cached per minute.
+ * older sessions are not changed by later additions. Tables are tiny; cached per (key, t).
  */
 export function blocklistLookup(db: Db) {
   const cache = new Map<string, BlockHit | null>();
@@ -68,7 +68,7 @@ export function blocklistLookup(db: Db) {
     );
   const look = (kind: "token" | "dev", key: string | null | undefined, t: number): BlockHit | null => {
     if (!key) return null;
-    const k = `${kind}|${key}|${Math.floor(t / 60_000)}`;
+    const k = `${kind}|${key}|${t}`;
     if (cache.has(k)) return cache.get(k)!;
     const r = kind === "token" ? q("blocklist_tokens", "mint", key, t) : q("blocklist_devs", "wallet", key, t);
     const v = r ? { kind, key, reason: r.reason, source: r.source } : null;

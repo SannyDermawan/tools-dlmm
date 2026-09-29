@@ -18,6 +18,8 @@ export interface PositionSpec {
   variant?: Variant;
   cohort?: number;
   signalId?: string | null;
+  /** phase 10: skip pools in cooldown (signal modes; null = not applicable) */
+  cooldownEnabled?: boolean | null;
   /** full grid combination, journaled as JSON */
   combo: Record<string, unknown>;
 }
