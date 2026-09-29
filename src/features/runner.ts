@@ -8,6 +8,9 @@ import { Scorer, securityLookup, type ScoreResult } from "./scorer.ts";
 import { extraLookup } from "./extraLookup.ts";
 import type { MemoryView } from "./compute.ts";
 import { auditLookup, blocklistLookup, type BlocklistLookup } from "./safetyData.ts";
+import { SmartLpLookup } from "./smartLp.ts";
+import { IndicatorLookup } from "./indicators.ts";
+import { llmFeatureLookup } from "../llm/collector.ts";
 
 /** Hour-of-day volume vs the pool's mean, from completed 1h candles before t (look-ahead safe). */
 export function hourlyVolumeRatioFn(db: Db, minDays: number) {
@@ -42,6 +45,8 @@ export class ScoringRunner {
   readonly scorer: Scorer;
   /** blocklist view (phase 10); invalidate() after an automatic addition */
   readonly blocklist: BlocklistLookup;
+  /** chart indicators (phase 13); shared with the grid's entry filters */
+  readonly indicators: IndicatorLookup | null;
   private nextT: number;
   scored = 0;
   onScores: ((r: ScoreResult[]) => void) | null = null;
@@ -60,6 +65,7 @@ export class ScoringRunner {
     memory?: MemoryView,
   ) {
     this.blocklist = blocklistLookup(db);
+    this.indicators = c.indicators.enabled ? new IndicatorLookup(db, c.indicators) : null;
     const macro = db.all<{ ts: number; name: string }>("SELECT ts, name FROM macro_events");
     this.scorer = new Scorer({
       config: c,
@@ -75,6 +81,9 @@ export class ScoringRunner {
       audit: c.collectors.token_audit.enabled ? auditLookup(db, (c.scoring.max_age_seconds.audit ?? 2700) * 1000) : undefined,
       blocklist: this.blocklist,
       memory,
+      indicators: this.indicators ?? undefined,
+      llm: c.llm.enabled ? llmFeatureLookup(db, 3 * c.llm.interval_minutes * 60_000) : undefined,
+      smartLp: c.real_lp.enabled && c.scoring.features.smart_lp ? new SmartLpLookup(db, c.real_lp.smart, metas.map((m) => m.pool)) : undefined,
     });
     if (swapPools) for (const [pool, tr] of this.scorer.trackers) tr.swapsCollected = swapPools.has(pool);
     const iv = c.scoring.interval_seconds * 1000;

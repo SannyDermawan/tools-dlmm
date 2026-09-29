@@ -31,7 +31,7 @@ export interface DatasetSummary {
  * Several simulation runs over the same collected data are the same evidence: only the newest
  * run per data session is used.
  */
-export function buildDataset(db: Db, c: Config): DatasetSummary {
+export function buildDataset(db: Db, c: Config, source: "sim" | "real_lp" = "sim"): DatasetSummary {
   const sims = db.all<{ session_id: string; kind: string; start_at: number; data_session: string; data_start: number }>(
     `SELECT s.session_id, s.kind, s.start_at, COALESCE(s.source_session_id, s.session_id) data_session,
             COALESCE((SELECT start_at FROM sessions d WHERE d.session_id = s.source_session_id), s.start_at) data_start
@@ -47,6 +47,7 @@ export function buildDataset(db: Db, c: Config): DatasetSummary {
     if (prev) skipped.push(prev.session_id);
     newest.set(s.data_session, s);
   }
+  if (source === "real_lp") return realLpDataset(db, c, [...newest.values()].sort((a, b) => a.data_start - b.data_start), skipped);
   const modes = c.calibration.entry_modes;
   const obs: Observation[] = [];
   const sessions: DatasetSummary["dataSessions"] = [];
@@ -74,4 +75,56 @@ export function buildDataset(db: Db, c: Config): DatasetSummary {
     sessions.push({ id: s.data_session, start: s.data_start, simSession: s.session_id, observations: rows.length });
   }
   return { observations: obs, dataSessions: sessions, skippedSimSessions: skipped };
+}
+
+/**
+ * Addendum 4.3 (1) / closing step: real LP positions of other wallets as a separate labelled
+ * dataset. A real position opened inside one of our data sessions is matched with our latest
+ * signal for that pool at or before its open (never later: no look-ahead); positions of one pool
+ * opened in the same hour are averaged into one observation. Net PnL % is clipped to
+ * [-100, 300] so a few extreme wallets do not dominate the fit. Kept apart from simulator data.
+ */
+function realLpDataset(
+  db: Db,
+  c: Config,
+  runs: { session_id: string; data_session: string; data_start: number }[],
+  skipped: string[],
+): DatasetSummary {
+  const obs: Observation[] = [];
+  const sessions: DatasetSummary["dataSessions"] = [];
+  const maxAge = c.signals.max_signal_age_seconds * 1000;
+  for (const s of runs) {
+    const end = db.get<{ e: number | null }>("SELECT COALESCE(end_at, ?) e FROM sessions WHERE session_id = ?", Date.now(), s.data_session)?.e ?? Date.now();
+    const rows = db.all<{ pool: string; opened_at: number; net: number; category: string }>(
+      `SELECT r.pool, r.opened_at, r.net_pnl_pct net, pl.category FROM real_lp_positions r JOIN pools pl ON pl.pool = r.pool
+       WHERE r.is_closed = 1 AND r.net_pnl_pct IS NOT NULL AND r.opened_at BETWEEN ? AND ?
+         AND r.pool IN (SELECT pool FROM session_pools WHERE session_id = ?)`,
+      s.data_start, end, s.data_session,
+    );
+    const groups = new Map<string, { pool: string; hour: number; category: string; nets: number[]; payload: string }>();
+    for (const r of rows) {
+      const sig = db.get<{ payload: string }>(
+        "SELECT payload FROM signals WHERE session_id = ? AND pool = ? AND ts <= ? AND ts >= ? ORDER BY ts DESC LIMIT 1",
+        s.session_id, r.pool, r.opened_at, r.opened_at - maxAge,
+      );
+      if (!sig) continue;
+      const hour = Math.floor(r.opened_at / 3_600_000);
+      const k = `${r.pool}|${hour}`;
+      const g = groups.get(k) ?? { pool: r.pool, hour, category: r.category, nets: [], payload: sig.payload };
+      g.nets.push(Math.max(-100, Math.min(300, r.net)));
+      groups.set(k, g);
+    }
+    for (const g of groups.values()) {
+      const payload = JSON.parse(g.payload) as { scores: Record<string, number | null>; final_score: number | null };
+      obs.push({
+        dataSession: s.data_session, dataStart: s.data_start, simSession: s.session_id, pool: g.pool, cohort: g.hour,
+        category: g.category as PoolCategory,
+        scores: Object.fromEntries(MODULES.map((m) => [m, payload.scores?.[m] ?? null])) as Record<ModuleName, number | null>,
+        finalScore: payload.final_score, y: g.nets.reduce((a, b) => a + b, 0) / g.nets.length,
+        win: g.nets.filter((x) => x > 0).length / g.nets.length, positions: g.nets.length,
+      });
+    }
+    sessions.push({ id: s.data_session, start: s.data_start, simSession: s.session_id, observations: groups.size });
+  }
+  return { observations: obs, dataSessions: sessions.filter((x) => x.observations > 0), skippedSimSessions: skipped };
 }

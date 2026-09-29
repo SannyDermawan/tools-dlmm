@@ -2,7 +2,8 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { Db } from "../db/index.ts";
 import { getSession } from "../db/repo.ts";
-import { calibrationMarkdown, groupComparison, groupComparisonMarkdown, reconciliationMarkdown, safetyMemoryMarkdown, scoreCalibration, signalVsBaseline, signalVsBaselineMarkdown } from "./analytics.ts";
+import { realismMarkdown } from "../analysis/realism.ts";
+import { calibrationMarkdown, groupComparison, groupComparisonMarkdown, reconciliationMarkdown, safetyMemoryMarkdown, entryFilterMarkdown, scoreCalibration, signalVsBaseline, signalVsBaselineMarkdown } from "./analytics.ts";
 import { markdownToHtml } from "./html.ts";
 
 interface Agg {
@@ -92,6 +93,7 @@ export function writeSessionReport(db: Db, simSessionId: string, outDir = "repor
     ["entry hour (WIB)", "printf('%02d:00', ((p.opened_at / 3600000) + 7) % 24)"],
     ["signal action at entry", "COALESCE(json_extract(p.grid_combo,'$.signal_action'),'none')"],
     ["entry mode x signal action", "p.entry_mode || ' / ' || COALESCE(json_extract(p.grid_combo,'$.signal_action'),'none')"],
+    ["entry filter (indicators)", "COALESCE(p.entry_filter, 'none')"],
     ["pool cooldown (signal modes)", "CASE p.cooldown_enabled WHEN 1 THEN 'on' WHEN 0 THEN 'off' ELSE 'n/a' END"],
     ["matches recommendation", "CASE json_extract(p.grid_combo,'$.matches_recommendation') WHEN 1 THEN 'yes' ELSE 'no' END"],
   ];
@@ -172,6 +174,14 @@ export function writeSessionReport(db: Db, simSessionId: string, outDir = "repor
   md.push("## Safety filters, blocklist and pool memory (addendum 3)");
   md.push("");
   md.push(safetyMemoryMarkdown(db, simSessionId, dataSession, ds.start_at, ds.end_at ?? Date.now()));
+  md.push("");
+  md.push("## Indicator entry filters (addendum 6.1)");
+  md.push("");
+  md.push(entryFilterMarkdown(db, simSessionId));
+  md.push("");
+  md.push("## Real LP positions and simulator realism (addendum 4)");
+  md.push("");
+  md.push(realismMarkdown(db, dataSession));
   md.push("");
   md.push("## Score calibration");
   md.push("");

@@ -38,6 +38,7 @@ rpc:
       getMultipleAccounts: 1
       getSignaturesForAddress: 1
       getTokenLargestAccounts: 1
+      getProgramAccounts: 10       # Helius: 10 credits (real LP scans, phase 11)
   ws:
     heartbeat_seconds: 20
     reconnect_base_delay_ms: 1000
@@ -243,6 +244,8 @@ grid:
     single_sided_reseed: { max_reseeds: 3 }
     wide_range: { bins_per_side: [69, 100, 150], strategy: spot }  # own widths; bins_per_side ignored
   cooldown_enabled: [true, false] # signal modes run with and without pool cooldown (baseline: never)
+  entry_filter: [none, supertrend_break, rsi_reversal, bollinger_reversion]  # indicator entry filters (phase 13);
+                                # a dimension of the balanced sample: each combination gets one filter
   sampling:                     # the full grid is huge: balanced random sample of combinations,
     mode: balanced              # every level of every dimension appears ~equally; the same sample
     max_combos: 180             # is used for every pool and entry mode (paired comparisons)
@@ -263,6 +266,81 @@ memory:                          # pool / token memory across sessions (phase 10
     oor_hours: 12
     modes: [signal_enter]        # closes of these entry modes drive the cooldown
   min_positions_for_features: 5  # pool history features need at least this many positions
+
+indicators:                      # chart indicators from our own OHLCV (phase 13); regime features + entry filters
+  enabled: true
+  timeframes: [5m, 15m]          # 15m is aggregated from the stored 5m candles
+  rsi_period: 14
+  rsi_low: 30
+  rsi_high: 70
+  bb_period: 20
+  bb_k: 2
+  st_period: 10                  # Supertrend ATR period
+  st_mult: 3
+  fib_lookback: 48               # bars of the swing for the Fibonacci position
+  filter_timeframe: 15m          # entry filters read this timeframe
+  filter_lookback_bars: 3        # a break / reversal must be this recent
+
+llm:                             # conditional LLM layer (phase 13.2): features + explanations only, never decisions
+  enabled: false                 # also needs the activation condition below
+  provider: anthropic            # anthropic | openai_compatible | local (OpenAI-style /chat/completions)
+  model: claude-opus-5-5
+  base_url: null                 # openai_compatible / local only, e.g. http://127.0.0.1:11434/v1
+  api_key_env: ANTHROPIC_API_KEY # name of the .env variable holding the key (local: may be empty)
+  effort: low                    # anthropic: classification-style tasks
+  temperature: 0                 # openai_compatible / local only (current Claude models reject sampling params)
+  max_tokens: 16000
+  timeout_ms: 120000
+  price_per_mtok: { input: 4, output: 20 }   # USD, for the budget (claude-opus-5-5 list price)
+  daily_budget_usd: 1.0          # stop calling for the rest of the UTC day when reached
+  max_calls_per_hour: 60
+  prompt_version: p1             # part of config_version; bump when a prompt changes
+  cache_hours: 6                 # same role + input within this window -> cached answer, no call
+  max_input_chars: 6000          # external text is sanitized and cut to this size
+  activation:                    # addendum 6.2: only after enough comparison data without the LLM
+    min_clean_sessions: 10       # finished live sessions since `since` ...
+    since: "2026-09-29"
+    max_gap_minutes: 5           # ... with no pool_state / bin_snapshot gap longer than this
+  roles: { token_social: true, narrative: true, explainer: true }
+  use_in_scoring: false          # LLM features in the safety / attention modules (compare with a replay variant)
+  interval_minutes: 60           # token features refreshed this often per token
+  max_tokens_per_round: 20       # risk tokens scored per round
+
+telegram:                        # read-only notifications + commands (phase 12)
+  enabled: false                 # needs TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_ALLOWED_USER_IDS in .env
+  in_session: true               # a live session runs the bot too (else: `dlmm telegram run` in another terminal)
+  min_signal_score: 80
+  min_confidence: 0.7
+  signal_actions: [MASUK]
+  daily_briefing_time_wib: "08:00"
+  poll_seconds: 15               # database watch interval (signals, sessions, alerts)
+  batch_seconds: 60              # signals of this window go into one message
+  min_interval_seconds: 3        # between two messages
+  max_messages_per_hour: 30      # beyond this, non-command messages are dropped (logged)
+  alerts:
+    gap_minutes: 5               # a data gap open this long -> alert
+    quota_pct: 80                # RPC credits used (of the plan) -> alert
+    ws_down_minutes: 5
+    heartbeat_stale_minutes: 5   # a running session without heartbeat -> alert (hung?)
+    repeat_minutes: 60           # the same alert at most once per this window
+
+real_lp:                         # real LP positions of other wallets (phase 11)
+  enabled: true
+  scan_minutes: 30               # on-chain scan of open positions per pool (getProgramAccounts by lb_pair)
+  max_wallet_queries_per_scan: 40   # Meteora Data API /positions/{pool}/pnl calls per scan (all pools)
+  max_pages_per_wallet: 3        # 100 positions per page
+  refetch_hours: 6               # re-query a (wallet, pool) at most this often (closed ones get priority)
+  fetch_events: true             # /positions/{address}/historical for positions closed in our data window
+  max_event_fetches_per_scan: 60
+  shape_for_new_positions: true  # decode liquidity shares of positions opened while we watch (1 getMultipleAccounts / 100)
+  smart:                         # lp_wallets.status_smart (only closed positions count)
+    min_closed_positions: 10
+    min_win_rate: 0.6
+    min_avg_pnl_pct: 1
+  realism:                       # simulator realism check (dlmm lp realism)
+    max_single_add_gap_seconds: 60   # "simple" positions: one add, removes only within this of the close
+    min_duration_minutes: 5
+    max_checks: 500
 
 rug_detection:                   # auto blocklist (phase 10)
   enabled: true
@@ -299,6 +377,7 @@ scoring:
     min_flow_samples: 20         # ... and at least this many sampled swaps in the window
     min_price_minutes: 15        # realized vol / ER need this many 1-minute bars
     er_minutes: 30               # N for efficiency ratio and trend_z
+    smart_lp: true               # phase 11: smart LP presence feature (competition module); false = off
     markout_seconds: 60
     whale_swap_usd: 5000         # swaps at least this large count as whale flow
   edge:

@@ -398,6 +398,169 @@ macroCmd
     app.db.close();
   });
 
+const lpCmd = program.command("lp").description("real LP positions of other wallets (phase 11): collection, smart LPs, simulator realism");
+lpCmd
+  .command("collect")
+  .description("scan open positions on chain and fetch wallets' position PnL from the Meteora Data API")
+  .option("-s, --session <id>", "use the pools of this session (default: latest session / collect)")
+  .option("-p, --pool <address...>", "pools")
+  .option("--scans <n>", "number of scans", (v) => parseInt(v, 10), 1)
+  .option("--interval <minutes>", "minutes between scans", parseFloat)
+  .option("--wallets <n>", "override real_lp.max_wallet_queries_per_scan", (v) => parseInt(v, 10))
+  .action(async (opts) => {
+    const app = createApp(cfgPath());
+    const { MeteoraApi } = await import("./api/meteora.ts");
+    const { RpcClient } = await import("./chain/rpc.ts");
+    const { endpoints } = await import("./app.ts");
+    const { loadPoolMeta } = await import("./collectors/discovery.ts");
+    const { RealLpCollector } = await import("./collectors/realLp.ts");
+    const { latestSession, getSession } = await import("./db/repo.ts");
+    const c = structuredClone(app.lc.config);
+    if (opts.wallets !== undefined) c.real_lp.max_wallet_queries_per_scan = opts.wallets;
+    let pools: string[] = opts.pool ?? [];
+    if (!pools.length) {
+      const s = opts.session ? getSession(app.db, opts.session) : (latestSession(app.db, "session") ?? latestSession(app.db, "collect"));
+      if (!s) throw new Error("no session found; pass --pool");
+      pools = app.db.all<{ pool: string }>("SELECT pool FROM session_pools WHERE session_id=? ORDER BY rank", s.session_id).map((r) => r.pool);
+    }
+    const metas = new Map(pools.map((p) => [p, loadPoolMeta(app.db, p)]).filter((x): x is [string, NonNullable<ReturnType<typeof loadPoolMeta>>] => !!x[1]));
+    const rpc = new RpcClient({ url: endpoints(app.lc).httpUrl, maxRps: Math.max(0.5, c.rpc.max_rps / 2), maxConcurrency: 1, timeoutMs: 60_000, retry: c.rpc.retry, commitment: c.rpc.commitment, log: app.log });
+    const api = new MeteoraApi({ baseUrl: c.api.meteora_base_url, maxRps: Math.min(c.api.max_rps, 3), timeoutMs: c.api.request_timeout_ms, retry: c.api.retry, log: app.log });
+    const col = new RealLpCollector({ db: app.db, rpc, api: api.http, config: c, log: app.log, pools: metas });
+    for (let i = 0; i < opts.scans; i++) {
+      if (i > 0) await new Promise((r) => setTimeout(r, (opts.interval ?? c.real_lp.scan_minutes) * 60_000));
+      const st = await col.tick();
+      console.log(`scan ${i + 1}/${opts.scans}: ${JSON.stringify(st)}`);
+    }
+    const tot = app.db.get<{ n: number; closed: number; wallets: number }>("SELECT COUNT(*) n, SUM(is_closed) closed, COUNT(DISTINCT wallet) wallets FROM real_lp_positions")!;
+    console.log(`real_lp_positions: ${tot.n} (${tot.closed ?? 0} closed) from ${tot.wallets} wallets; RPC credits ~${rpc.creditsUsed}`);
+    app.db.close();
+  });
+lpCmd
+  .command("realism")
+  .description("replay simple real positions inside our data in the simulator; compare fee and PnL")
+  .option("-s, --session <id>", "only this data session")
+  .option("--recheck", "re-run positions already checked")
+  .action(async (opts) => {
+    const app = createApp(cfgPath());
+    const { runRealismChecks, realismMarkdown } = await import("./analysis/realism.ts");
+    const r = runRealismChecks(app.db, app.lc.config, { dataSessionId: opts.session, recheck: opts.recheck });
+    console.log(`checked ${r.checked}, skipped ${r.skipped} ${JSON.stringify(r.byReason)}`);
+    console.log(realismMarkdown(app.db, opts.session));
+    app.db.close();
+  });
+lpCmd
+  .command("wallets")
+  .description("recompute lp_wallets and list the best wallets")
+  .option("-n, --top <n>", "rows", (v) => parseInt(v, 10), 20)
+  .option("--smart", "smart wallets only")
+  .action(async (opts) => {
+    const app = createApp(cfgPath());
+    const { recomputeWallets } = await import("./collectors/realLp.ts");
+    const n = recomputeWallets(app.db, app.lc.config.real_lp.smart);
+    const rows = app.db.all<{ wallet: string; positions: number; closed_positions: number; win_rate: number | null; avg_pnl_pct: number | null; total_pnl_usd: number | null; status_smart: number }>(
+      `SELECT * FROM lp_wallets ${opts.smart ? "WHERE status_smart = 1" : ""} ORDER BY status_smart DESC, total_pnl_usd DESC LIMIT ?`, opts.top,
+    );
+    console.log(`${n} wallets; smart: ${app.db.get<{ n: number }>("SELECT COUNT(*) n FROM lp_wallets WHERE status_smart = 1")!.n}`);
+    for (const r of rows)
+      console.log(`${r.wallet.padEnd(44)} ${r.status_smart ? "SMART" : "     "} closed ${String(r.closed_positions).padStart(4)}/${String(r.positions).padEnd(4)} win ${r.win_rate === null ? "  -" : (r.win_rate * 100).toFixed(0).padStart(3) + "%"} avg ${(r.avg_pnl_pct ?? 0).toFixed(1).padStart(6)}%  total $${(r.total_pnl_usd ?? 0).toFixed(0)}`);
+    app.db.close();
+  });
+
+const tgCmd = program.command("telegram").description("read-only Telegram notifications and commands (phase 12)");
+const tgSetup = async () => {
+  const app = createApp(cfgPath());
+  const { TelegramApi } = await import("./notify/telegramApi.ts");
+  const { TelegramService, accessFromEnv } = await import("./notify/service.ts");
+  const token = process.env.TELEGRAM_BOT_TOKEN?.trim();
+  if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set in .env");
+  const api = new TelegramApi(token);
+  const access = accessFromEnv();
+  const c = app.lc.config;
+  let explain;
+  if (c.llm.enabled) {
+    const { LlmLayer, briefingExplainer } = await import("./llm/layer.ts");
+    const { providerFromConfig } = await import("./llm/client.ts");
+    explain = briefingExplainer(new LlmLayer(app.db, c.llm, providerFromConfig(c.llm), app.log));
+  }
+  return { app, api, access, svc: new TelegramService(app.db, c.telegram, api, access, app.log, c.rpc.quota.warn_at_pct, explain) };
+};
+tgCmd
+  .command("run")
+  .description("run the notifier + command handler until Ctrl+C (use when the session does not run it: telegram.in_session false)")
+  .action(async () => {
+    const { app, access, svc } = await tgSetup();
+    if (!access.chatIds.length || !access.userIds.length) throw new Error("set TELEGRAM_CHAT_ID and TELEGRAM_ALLOWED_USER_IDS in .env");
+    const ac = new AbortController();
+    process.once("SIGINT", () => ac.abort());
+    process.once("SIGTERM", () => ac.abort());
+    console.log(`telegram: notifying ${access.chatIds.length} chat(s), commands from ${access.userIds.length} user(s); Ctrl+C to stop`);
+    await svc.run(ac.signal);
+    app.db.close();
+  });
+tgCmd
+  .command("test")
+  .description("send a test message to TELEGRAM_CHAT_ID")
+  .action(async () => {
+    const { app, access, svc } = await tgSetup();
+    svc.enqueue("reply", "✅ dlmm test message: notifications work. /help lists the read-only commands.", true);
+    await svc.flush();
+    console.log(`sent to ${access.chatIds.join(", ") || "(no TELEGRAM_CHAT_ID set)"}; see notifications_log for the status`);
+    app.db.close();
+  });
+tgCmd
+  .command("whoami")
+  .description("print chat and user ids of recent messages to the bot (to fill TELEGRAM_CHAT_ID / TELEGRAM_ALLOWED_USER_IDS)")
+  .action(async () => {
+    const { app, api } = await tgSetup();
+    const ups = await api.getUpdates(undefined, 0);
+    if (!ups.length) console.log("no recent messages: send /start to the bot, then run this again");
+    for (const u of ups) if (u.message) console.log(`chat ${u.message.chat.id} (${u.message.chat.type})  user ${u.message.from?.id} @${u.message.from?.username ?? "-"}: ${u.message.text ?? ""}`);
+    app.db.close();
+  });
+
+const llmCmd = program.command("llm").description("conditional LLM layer (phase 13.2): features and explanations only");
+llmCmd
+  .command("status")
+  .description("activation condition, budget, recent calls")
+  .action(async () => {
+    const app = createApp(cfgPath());
+    const { LlmLayer } = await import("./llm/layer.ts");
+    const layer = new LlmLayer(app.db, app.lc.config.llm, null);
+    const a = layer.activation();
+    const b = layer.budget();
+    console.log(`llm: ${app.lc.config.llm.enabled ? "enabled" : "disabled"} (${app.lc.config.llm.provider} ${app.lc.config.llm.model}, prompt ${app.lc.config.llm.prompt_version})`);
+    console.log(`activation: ${a.active ? "ACTIVE" : "inactive"} — ${a.reason} (clean sessions ${a.cleanSessions}/${a.needed})`);
+    console.log(`budget: $${b.spentTodayUsd.toFixed(4)} of $${app.lc.config.llm.daily_budget_usd} today, ${b.callsLastHour} calls in the last hour (${b.reason})`);
+    for (const r of app.db.all<{ ts: number; role: string; subject: string | null; valid: number; error: string | null; cost_usd: number }>("SELECT ts, role, subject, valid, error, cost_usd FROM llm_calls ORDER BY id DESC LIMIT 10"))
+      console.log(`  ${new Date(r.ts).toISOString()} ${r.role.padEnd(12)} ${(r.subject ?? "").slice(0, 12).padEnd(12)} ${r.valid ? "valid  " : "INVALID"} $${r.cost_usd.toFixed(4)} ${r.error ?? ""}`);
+    app.db.close();
+  });
+llmCmd
+  .command("test")
+  .description("one manual call (skips only the activation condition; the switch, budget and validation still apply)")
+  .option("--token <mint>", "token_social on this mint")
+  .option("-s, --session <id>", "explainer on this session's result")
+  .action(async (opts) => {
+    const app = createApp(cfgPath());
+    const { LlmLayer } = await import("./llm/layer.ts");
+    const { providerFromConfig } = await import("./llm/client.ts");
+    const c = app.lc.config;
+    const layer = new LlmLayer(app.db, c.llm, providerFromConfig(c.llm), app.log);
+    if (opts.token) {
+      const { LlmFeatureCollector } = await import("./llm/collector.ts");
+      const { publicHttp } = await import("./collectors/extraCollectors.ts");
+      const col = new LlmFeatureCollector(app.db, c, layer, new Map(), publicHttp(c, c.api.dexscreener_base_url, "dexscreener", { log: app.log }), app.log);
+      const data = await col.tokenData(opts.token);
+      console.log("input:", JSON.stringify(data).slice(0, 600));
+      console.log(JSON.stringify(await layer.tokenSocial(opts.token, data, { force: true }), null, 2));
+    } else if (opts.session) {
+      const { formatSessionResult } = await import("./notify/format.ts");
+      console.log(JSON.stringify(await layer.explain(opts.session, { hasil_sesi: formatSessionResult(app.db, opts.session, "Sesi") }, { force: true }), null, 2));
+    } else console.log("pass --token <mint> or --session <id>");
+    app.db.close();
+  });
+
 const blockCmd = program.command("blocklist").description("token / dev blocklist (safety gate veto, phase 10)");
 blockCmd
   .command("add")
@@ -447,10 +610,13 @@ program
   .description("fit module weights from the journal, validate walk-forward + holdout, write a new config_version if it is better")
   .option("--write", "write config/calibrated/<profile>.yaml when accepted")
   .option("--force", "evaluate even with fewer sessions than calibration.min_sessions (never writes on its own)")
+  .option("--source <source>", "sim (simulator baseline positions) or real_lp (real positions of other wallets, kept separate)", "sim")
   .action(async (opts) => {
+    if (opts.source !== "sim" && opts.source !== "real_lp") throw new Error("--source must be sim or real_lp");
     const app = createApp(cfgPath());
     const { calibrate } = await import("./calibration/calibrate.ts");
-    const r = calibrate(app.db, app.lc, { force: opts.force, write: opts.write });
+    const r = calibrate(app.db, app.lc, { force: opts.force, write: opts.write, source: opts.source });
+    console.log(`source: ${opts.source}`);
     console.log(`status: ${r.status}  data sessions: ${r.dataSessions}  observations: ${r.observations}`);
     for (const n of r.notes) console.log(`  note: ${n}`);
     for (const c of r.categories) {

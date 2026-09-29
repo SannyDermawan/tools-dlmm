@@ -1,8 +1,19 @@
 import { EventEmitter } from "node:events";
 import WebSocket from "ws";
+import { HttpsProxyAgent } from "https-proxy-agent";
 import { backoffDelay, sleep } from "../util/async.ts";
 import type { Logger } from "../util/logger.ts";
 import { redactUrl } from "../util/redact.ts";
+
+/** `ws` ignores HTTPS_PROXY; honour it when set (sandboxed / corporate networks). Unset -> direct. */
+let agentCache: HttpsProxyAgent<string> | null | undefined;
+function proxyAgent(): HttpsProxyAgent<string> | undefined {
+  if (agentCache === undefined) {
+    const p = process.env.HTTPS_PROXY || process.env.https_proxy;
+    agentCache = p ? new HttpsProxyAgent(p) : null;
+  }
+  return agentCache ?? undefined;
+}
 
 export interface SubscriptionSpec {
   key: string; // caller's id (e.g. pool address)
@@ -86,7 +97,7 @@ export class ReconnectingWs extends EventEmitter {
         }
         resolve(reason);
       };
-      const ws = new WebSocket(this.o.url, { handshakeTimeout: 15_000 });
+      const ws = new WebSocket(this.o.url, { handshakeTimeout: 15_000, agent: proxyAgent() });
       this.ws = ws;
       const onAbort = () => done("aborted");
       this.o.signal.addEventListener("abort", onAbort, { once: true });

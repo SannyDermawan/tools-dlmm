@@ -1,5 +1,6 @@
 import type { Config, ModuleName } from "../config/schema.ts";
 import type { AuditRow } from "./safetyData.ts";
+import type { TfSnapshot } from "./indicators.ts";
 import type { EcoTracker, PoolTracker } from "./tracker.ts";
 import type { ExtraLookup } from "./extraLookup.ts";
 
@@ -68,6 +69,20 @@ export const FEATURE_SPECS: FeatureSpec[] = [
   { name: "token_age_hours", module: "context", direction: 0, description: "hours since the token's first pool (Jupiter)" },
   { name: "pool_hist_net_pct", module: "edge", direction: 0, description: "pool memory: mean net PnL % of past baseline positions" },
   { name: "pool_hist_win_rate", module: "edge", direction: 0, description: "pool memory: win rate of past baseline positions" },
+  // ---- phase 13: chart indicators from our own OHLCV (raw regime features, weight 0 until calibrated)
+  ...(["5m", "15m"] as const).flatMap((tf) => [
+    { name: `rsi_${tf}`, module: "regime" as const, direction: 0 as const, description: `RSI on ${tf} candles` },
+    { name: `bb_pctb_${tf}`, module: "regime" as const, direction: 0 as const, description: `Bollinger %B on ${tf} candles (0 = lower band, 1 = upper)` },
+    { name: `supertrend_dir_${tf}`, module: "regime" as const, direction: 0 as const, description: `Supertrend direction on ${tf} (+1 up, -1 down)` },
+    { name: `supertrend_age_${tf}`, module: "regime" as const, direction: 0 as const, description: `bars since the last Supertrend flip on ${tf}` },
+    { name: `fib_pos_${tf}`, module: "regime" as const, direction: 0 as const, description: `close within the last swing on ${tf} (0 = swing low, 1 = high)` },
+  ]),
+  // ---- phase 13.2: LLM features (conditional; only weighted when llm.use_in_scoring)
+  { name: "llm_social_score", module: "safety", direction: 1, description: "LLM: social / web presence quality of the risk token (0-100)" },
+  { name: "llm_narrative_score", module: "attention", direction: 1, description: "LLM: organic attention / narrative fit (0-100; needs a post source)" },
+  // ---- phase 11: real LP positions of other wallets
+  { name: "smart_lp_present", module: "competition", direction: 1, description: "1 when a smart LP wallet (real positions) holds an open position in the pool" },
+  { name: "smart_lp_count", module: "context", direction: 0, description: "smart LP wallets with an open position in the pool" },
   { name: "requires_bin_array_init", module: "context", direction: 0, description: "1 when a bin array near the price is not initialized (opening costs rent)" },
   { name: "priority_fee_p75", module: "context", direction: 0, description: "priority fee p75 (micro-lamports/CU)" },
   { name: "macro_event_window", module: "context", direction: 0, description: "1 inside +-X min of a scheduled macro event" },
@@ -125,6 +140,12 @@ export interface ComputeContext {
   /** phase 10: Jupiter audit and pool memory; optional */
   audit?: (token: string, t: number) => AuditRow | null;
   memory?: MemoryView;
+  /** phase 11: smart LP presence (optional) */
+  smartLp?: { at(pool: string, t: number): { count: number; openPositions: number } | null };
+  /** phase 13.2: LLM features by risk token (optional) */
+  llm?: (token: string, name: string, t: number) => number | null;
+  /** phase 13: indicator snapshots per timeframe (optional) */
+  indicators?: { at(pool: string, t: number): Record<string, TfSnapshot> | null };
 }
 
 /** Look-ahead-safe view of the pool memory (phase 10). */
@@ -289,6 +310,25 @@ export function computeFeatures(tr: PoolTracker, cx: ComputeContext): RawFeature
   const memOk = mem && mem.positions >= c.memory.min_positions_for_features;
   set("pool_hist_net_pct", memOk ? mem!.avgNetPct : null, 0);
   set("pool_hist_win_rate", memOk ? mem!.winRate : null, 0);
+  const llmOf = (name: string) => {
+    if (!cx.llm) return null;
+    const v = cx.riskTokens.map((tk) => cx.llm!(tk, name, t)).filter((x): x is number => x !== null);
+    return v.length ? Math.min(...v) : null; // worst risk token
+  };
+  set("llm_social_score", llmOf("llm_social_score"), 0);
+  set("llm_narrative_score", llmOf("llm_narrative_score"), 0);
+  const ind = cx.indicators?.at(tr.meta.pool, t) ?? null;
+  for (const tf of ["5m", "15m"]) {
+    const s = ind?.[tf];
+    set(`rsi_${tf}`, s?.rsi ?? null, 0);
+    set(`bb_pctb_${tf}`, s?.pctB ?? null, 0);
+    set(`supertrend_dir_${tf}`, s?.stDir ?? null, 0);
+    set(`supertrend_age_${tf}`, s?.stBarsSinceFlip ?? null, 0);
+    set(`fib_pos_${tf}`, s?.fib?.pos ?? null, 0);
+  }
+  const slp = cx.smartLp?.at(tr.meta.pool, t) ?? null;
+  set("smart_lp_present", slp ? (slp.count > 0 ? 1 : 0) : null, 0);
+  set("smart_lp_count", slp?.count ?? null, 0);
   set("requires_bin_array_init", tr.snap ? (tr.snap.missingBinArrays.length ? 1 : 0) : null, age(tr.snap?.ts, "bin_snapshot"));
 
   // ---- context

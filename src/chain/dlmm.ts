@@ -1,7 +1,7 @@
 import { BorshAccountsCoder, BorshEventCoder, utils } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
 import BN from "bn.js";
-import * as ns from "@meteora-ag/dlmm";
+import { meteoraSdk as ns } from "./sdk.ts";
 import type { RawTransaction } from "./rpc.ts";
 
 export const IDL = ns.IDL as unknown as {
@@ -303,4 +303,24 @@ export function extractSwaps(tx: RawTransaction): (SwapEvent & { eventIndex: num
 export function feeOnTokenX(s: SwapEvent, collectFeeMode: number): boolean {
   if (s.feesOnTokenX !== null) return s.feesOnTokenX;
   return collectFeeMode === 1 ? false : s.swapForY;
+}
+
+export interface PositionAccount {
+  lbPair: string;
+  owner: string;
+  lowerBinId: number;
+  upperBinId: number;
+  /** liquidity shares of the first min(70, width) bins (wider positions keep the rest in an extension) */
+  shares: number[];
+}
+
+/** PositionV2 account (8 disc + lb_pair 32 + owner 32 + liquidity_shares u128[70] + ...). */
+export const POSITION_OWNER_OFFSET = 40;
+export const POSITION_LB_PAIR_OFFSET = 8;
+
+export function decodePosition(data: Buffer): PositionAccount {
+  const a = accounts.decode("PositionV2", data) as Record<string, any>;
+  const width = a.upper_bin_id - a.lower_bin_id + 1;
+  const shares = (a.liquidity_shares as BN[]).slice(0, Math.min(70, width)).map((x) => Number(x.toString()));
+  return { lbPair: a.lb_pair.toBase58(), owner: a.owner.toBase58(), lowerBinId: a.lower_bin_id, upperBinId: a.upper_bin_id, shares };
 }

@@ -88,7 +88,10 @@ const ScoringSchema = z
       })
       .strict(),
     features: z
-      .object({ min_swap_coverage: frac, min_flow_samples: z.number().int().min(1), min_price_minutes: pos, er_minutes: pos, markout_seconds: pos, whale_swap_usd: pos })
+      .object({
+        min_swap_coverage: frac, min_flow_samples: z.number().int().min(1), min_price_minutes: pos, er_minutes: pos, markout_seconds: pos, whale_swap_usd: pos,
+        smart_lp: z.boolean().default(true), // phase 11: smart LP presence feature (competition module)
+      })
       .strict(),
     edge: z
       .object({
@@ -367,6 +370,7 @@ export const ConfigSchema = z
           })
           .strict(),
         cooldown_enabled: z.array(z.boolean()).min(1).default([false]),
+        entry_filter: z.array(z.enum(["none", "supertrend_break", "rsi_reversal", "bollinger_reversion"])).min(1).default(["none"]),
         cohort_interval_minutes: nonneg,
         max_positions: z.number().int().min(1),
       })
@@ -384,6 +388,89 @@ export const ConfigSchema = z
           })
           .strict(),
         min_positions_for_features: z.number().int().min(1),
+      })
+      .strict(),
+    indicators: z
+      .object({
+        enabled: z.boolean(),
+        timeframes: z.array(z.enum(["5m", "15m", "30m", "1h"])).min(1),
+        rsi_period: z.number().int().min(2),
+        rsi_low: pct,
+        rsi_high: pct,
+        bb_period: z.number().int().min(2),
+        bb_k: pos,
+        st_period: z.number().int().min(2),
+        st_mult: pos,
+        fib_lookback: z.number().int().min(5),
+        filter_timeframe: z.enum(["5m", "15m", "30m", "1h"]),
+        filter_lookback_bars: z.number().int().min(1),
+      })
+      .strict(),
+    llm: z
+      .object({
+        enabled: z.boolean(),
+        provider: z.enum(["anthropic", "openai_compatible", "local"]),
+        model: z.string().min(1),
+        base_url: z.string().nullable(),
+        api_key_env: z.string().min(1),
+        effort: z.enum(["low", "medium", "high", "xhigh", "max"]),
+        temperature: z.number().min(0).max(2),
+        max_tokens: z.number().int().min(256),
+        timeout_ms: pos,
+        price_per_mtok: z.object({ input: nonneg, output: nonneg }).strict(),
+        daily_budget_usd: nonneg,
+        max_calls_per_hour: z.number().int().min(0),
+        prompt_version: z.string().min(1),
+        cache_hours: nonneg,
+        max_input_chars: z.number().int().min(200),
+        activation: z.object({ min_clean_sessions: z.number().int().min(0), since: z.string(), max_gap_minutes: nonneg }).strict(),
+        roles: z
+          .object({ token_social: z.boolean(), narrative: z.boolean(), explainer: z.boolean() })
+          .strict(),
+        use_in_scoring: z.boolean(),
+        interval_minutes: pos,
+        max_tokens_per_round: z.number().int().min(1),
+      })
+      .strict(),
+    telegram: z
+      .object({
+        enabled: z.boolean(),
+        in_session: z.boolean(),
+        min_signal_score: pct,
+        min_confidence: frac,
+        signal_actions: z.array(z.string()).min(1),
+        daily_briefing_time_wib: z.string().regex(/^\d{2}:\d{2}$/),
+        poll_seconds: pos,
+        batch_seconds: pos,
+        min_interval_seconds: nonneg,
+        max_messages_per_hour: z.number().int().min(1),
+        alerts: z
+          .object({
+            gap_minutes: pos,
+            quota_pct: pct,
+            ws_down_minutes: pos,
+            heartbeat_stale_minutes: pos,
+            repeat_minutes: pos,
+          })
+          .strict(),
+      })
+      .strict(),
+    real_lp: z
+      .object({
+        enabled: z.boolean(),
+        scan_minutes: pos,
+        max_wallet_queries_per_scan: z.number().int().min(0),
+        max_pages_per_wallet: z.number().int().min(1),
+        refetch_hours: nonneg,
+        fetch_events: z.boolean(),
+        max_event_fetches_per_scan: z.number().int().min(0),
+        shape_for_new_positions: z.boolean(),
+        smart: z
+          .object({ min_closed_positions: z.number().int().min(1), min_win_rate: frac, min_avg_pnl_pct: z.number() })
+          .strict(),
+        realism: z
+          .object({ max_single_add_gap_seconds: nonneg, min_duration_minutes: nonneg, max_checks: z.number().int().min(1) })
+          .strict(),
       })
       .strict(),
     rug_detection: z

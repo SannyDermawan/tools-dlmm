@@ -11,6 +11,7 @@ import type { ExtraLookup } from "./extraLookup.ts";
 import { auditGate } from "./auditGate.ts";
 import type { AuditRow, BlockHit, BlocklistLookup } from "./safetyData.ts";
 import type { MemoryView } from "./compute.ts";
+import type { TfSnapshot } from "./indicators.ts";
 
 export type Action = "MASUK" | "PANTAU" | "LEWATI";
 
@@ -50,7 +51,8 @@ const SPEC = new Map(FEATURE_SPECS.map((f) => [f.name, f]));
 /** Blueprint features without a data source yet (P1/P2); not counted against confidence. */
 const NO_SOURCE_YET = new Set<string>();
 /** Phase 10 features that are optional sources (Jupiter audit, pool memory): never lower confidence. */
-const OPTIONAL_FEATURES = new Set(["organic_score", "bot_holders_pct", "pvp_rival_count", "token_age_hours", "pool_hist_net_pct", "pool_hist_win_rate", "requires_bin_array_init"]);
+const INDICATOR_FEATURES = ["5m", "15m"].flatMap((tf) => [`rsi_${tf}`, `bb_pctb_${tf}`, `supertrend_dir_${tf}`, `supertrend_age_${tf}`, `fib_pos_${tf}`]);
+const OPTIONAL_FEATURES = new Set([...INDICATOR_FEATURES, "llm_social_score", "llm_narrative_score", "smart_lp_present", "smart_lp_count", "organic_score", "bot_holders_pct", "pvp_rival_count", "token_age_hours", "pool_hist_net_pct", "pool_hist_win_rate", "requires_bin_array_init"]);
 /** Flow features (blueprint 8.2 core + P1 extensions). */
 export const FLOW_FEATURES = ["trader_diversity", "top5_wallet_share", "markout_60s", "buy_sell_balance", "markout_30s", "markout_300s", "wash_share", "whale_share"];
 const val = (f: RawFeatures, k: string) => f.get(k)?.raw ?? null;
@@ -133,6 +135,12 @@ export interface ScorerDeps {
   audit?: (token: string, t: number) => AuditRow | null;
   blocklist?: BlocklistLookup;
   memory?: MemoryView;
+  /** phase 11 (optional): smart LP presence */
+  smartLp?: { at(pool: string, t: number): { count: number; openPositions: number } | null };
+  /** phase 13.2 (optional): LLM features by risk token */
+  llm?: (token: string, name: string, t: number) => number | null;
+  /** phase 13 (optional): chart indicators */
+  indicators?: { at(pool: string, t: number): Record<string, TfSnapshot> | null };
 }
 
 /**
@@ -174,7 +182,7 @@ export class Scorer {
       if (blockedPools.has(pool)) continue;
       raw.set(pool, computeFeatures(tr, {
         config: c, t, eco: this.eco, security: this.d.security, macroEvents: this.d.macroEvents, riskTokens: this.riskTokens(tr.meta),
-        extra: this.d.extra, audit: this.d.audit, memory: this.d.memory,
+        extra: this.d.extra, audit: this.d.audit, memory: this.d.memory, smartLp: this.d.smartLp, indicators: this.d.indicators, llm: this.d.llm,
       }));
     }
     const norm = this.normalizer.normalize(raw);
@@ -215,9 +223,10 @@ export class Scorer {
         modules.regime = s;
       }
       modules.flow = mean(FLOW_FEATURES.map((k) => n.get(k)), 2);
-      modules.competition = mean(["lp_crowding", "bot_rebalance_freq", "pool_volume_share"].map((k) => n.get(k)), 1);
+      modules.competition = mean(["lp_crowding", "bot_rebalance_freq", "pool_volume_share", "smart_lp_present"].map((k) => n.get(k)), 1);
       // attention proxies (P1-P2): only weighted when scoring.modules.attention is on
-      modules.attention = mean(["trending_score", "boosts_active", "social_presence", "launchpad_heat"].map((k) => n.get(k)), 2);
+      const useLlm = c.llm.use_in_scoring;
+      modules.attention = mean(["trending_score", "boosts_active", "social_presence", "launchpad_heat", ...(useLlm ? ["llm_narrative_score"] : [])].map((k) => n.get(k)), 2);
       const secRows = this.riskTokens(m).map((tk) => this.d.security(tk, t));
       const g = sc.safety_gate;
       if (m.category === "bluechip") modules.safety = 100;
@@ -227,6 +236,8 @@ export class Scorer {
           val(f, "cluster_share") !== null ? 100 * (1 - val(f, "cluster_share")! / g.max_cluster_pct) : null,
           val(f, "dev_rug_history") !== null ? 100 * (1 - val(f, "dev_rug_history")! / g.max_dev_rugs) : null,
         ].map((x) => (x === null ? null : Math.max(0, Math.min(100, x))));
+        const llmSocial = useLlm ? val(f, "llm_social_score") : null;
+        if (llmSocial !== null) margins.push(Math.max(0, Math.min(100, llmSocial)));
         const bot = val(f, "bot_holders_pct");
         if (bot !== null) margins.push(Math.max(0, Math.min(100, 100 * (1 - bot / g.max_bot_holders_pct))));
         modules.safety = mean(margins, 1);

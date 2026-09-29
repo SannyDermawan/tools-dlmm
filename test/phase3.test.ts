@@ -14,7 +14,12 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const cfg = (): Config => structuredClone(loadConfig().config);
+// phase 3 grid semantics: no indicator entry filters (phase 13 dimension)
+const cfg = (): Config => {
+  const c = structuredClone(loadConfig().config);
+  c.grid.entry_filter = ["none"];
+  return c;
+};
 const META: PoolMeta = {
   pool: "POOL", name: "T-USD", tokenX: "T", tokenY: "USD", symbolX: "T", symbolY: "USD", decimalsX: 6, decimalsY: 6,
   binStep: 100, category: "memecoin", reserveX: "rx", reserveY: "ry", collectFeeMode: 0,

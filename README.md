@@ -47,6 +47,12 @@ swap stream falls behind and records data gaps.
 | `dlmm calibrate [--write] [--force]` | fit module weights, walk-forward + holdout, new config_version only when proven |
 | `dlmm report [-s SESSION]` | (re)write `reports/<session>/report.md`, `positions.csv`, `by_dimension.csv` |
 | `dlmm reconcile [-s SESSION] [--census]` | fee reconciliation; `--census` fetches every tx as ground truth |
+| `dlmm blocklist add\|remove\|list` | token / dev blocklist (safety gate veto; removal is a soft delete) |
+| `dlmm lp collect [-s SESSION] [--scans N]` | real LP positions of other wallets (on-chain scans + Meteora Data API) |
+| `dlmm lp realism [-s SESSION]` | replay simple real positions in the simulator, compare fee and PnL |
+| `dlmm lp wallets [--smart]` | recompute and list LP wallets / smart LPs |
+| `dlmm telegram run\|test\|whoami` | read-only Telegram notifier + commands (token and ids in `.env`) |
+| `dlmm llm status\|test` | conditional LLM layer: activation, budget, recent calls, one manual call |
 
 Run with `npm run dlmm -- <command>`. Use `-c path.yaml` for another config; a config file with
 `extends: default` only needs the keys it overrides.
@@ -137,6 +143,17 @@ redirect the output to a file (`... session start -q > session.out 2>&1`) and wa
 Windows a full pipe blocks the process. Ctrl+C stops cleanly: open
 positions are force-closed as `session_aborted` and the report is still written. A session killed
 hard (power loss) is marked `aborted` at the next start (or with `dlmm db recover`).
+
+## Optional services
+
+- **Telegram (phase 12):** create a bot with @BotFather, put `TELEGRAM_BOT_TOKEN` in `.env`, send
+  `/start` to the bot, run `npm run dlmm -- telegram whoami` and copy the ids into `TELEGRAM_CHAT_ID`
+  and `TELEGRAM_ALLOWED_USER_IDS`, set `telegram.enabled: true`. `telegram test` sends a test message.
+  A live session then runs the bot itself (`telegram.in_session`); commands are read-only.
+- **LLM layer (phase 13.2):** stays inactive until `llm.activation.min_clean_sessions` (10) clean
+  sessions exist since phase 10. Then set `llm.enabled: true` and the key named by `llm.api_key_env`
+  (`ANTHROPIC_API_KEY`) in `.env`; `dlmm llm status` shows budget and state. It only produces
+  features and explanations, never entries or exits.
 
 ## Workflow after setup
 

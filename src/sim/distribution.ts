@@ -1,5 +1,5 @@
 import BN from "bn.js";
-import * as sdk from "@meteora-ag/dlmm";
+import { meteoraSdk as sdk } from "../chain/sdk.ts";
 import type { Sides, Strategy } from "../config/schema.ts";
 
 /** SDK StrategyType enum values (Spot=0, Curve=1, BidAsk=2). */

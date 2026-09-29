@@ -12,6 +12,7 @@ import { GapTracker } from "./gaps.ts";
 import { SwapBudget, SwapStreamCollector, swapStreamEnabled } from "./swapStream.ts";
 import { TokenSecurityCollector } from "./tokenSecurity.ts";
 import { TokenAuditCollector } from "./tokenAudit.ts";
+import { RealLpCollector } from "./realLp.ts";
 import { AttentionCollector, MacroCollector, VenueCollector } from "./extraCollectors.ts";
 import { MarketBus, type PoolMeta } from "./types.ts";
 
@@ -217,6 +218,22 @@ export async function runCollection(app: AppContext, o: CollectOptions = {}): Pr
     if (cc.venues.enabled) tasks.push(guard("venues", new VenueCollector(extraDeps).run(signal)));
     if (cc.attention.enabled) tasks.push(guard("attention", new AttentionCollector(extraDeps).run(signal)));
     if (cc.macro.enabled) tasks.push(guard("macro", new MacroCollector(extraDeps).run(signal)));
+    // phase 13.2: LLM token features (only while llm is enabled AND its activation condition holds)
+    if (c.llm.enabled) {
+      const { LlmLayer } = await import("../llm/layer.ts");
+      const { providerFromConfig } = await import("../llm/client.ts");
+      const { LlmFeatureCollector } = await import("../llm/collector.ts");
+      const { publicHttp } = await import("./extraCollectors.ts");
+      try {
+        const layer = new LlmLayer(db, c.llm, providerFromConfig(c.llm), slog);
+        const dex = publicHttp(c, c.api.dexscreener_base_url, "dexscreener", { usage, log: slog, signal });
+        tasks.push(guard("llm", new LlmFeatureCollector(db, c, layer, poolMap, dex, slog, sessionId).run(signal)));
+      } catch (e) {
+        slog.warn({ err: (e as Error).message }, "llm layer not started");
+      }
+    }
+    // phase 11: real LP positions of other wallets (on-chain scans + Meteora Data API)
+    if (c.real_lp.enabled) tasks.push(guard("real_lp", new RealLpCollector({ db, rpc: secRpc, api: api.http, config: c, log: slog, pools: poolMap, signal }).run(signal)));
     // phase 10: Jupiter token audit (organic score, bot holders, launchpad, dev, PVP)
     if (cc.token_audit.enabled) tasks.push(guard("token_audit", new TokenAuditCollector({ db, log: slog, gaps, config: c, sessionId, pools: poolMap, usage, signal }).run(signal)));
     if (ws) tasks.push(guard("ws", ws.run()));

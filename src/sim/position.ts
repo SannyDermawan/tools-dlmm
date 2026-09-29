@@ -20,6 +20,8 @@ export interface PositionSpec {
   signalId?: string | null;
   /** phase 10: skip pools in cooldown (signal modes; null = not applicable) */
   cooldownEnabled?: boolean | null;
+  /** phase 13: indicator entry filter (none when absent) */
+  entryFilter?: string;
   /** full grid combination, journaled as JSON */
   combo: Record<string, unknown>;
 }

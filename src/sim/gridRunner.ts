@@ -6,6 +6,7 @@ import { evaluateMeridian, feeWindowMinutes, loadMeridianPreset, meridianExitPol
 import { expandExitPolicies, exitPolicyLabel, isPnlPolicy, newTrailing, oorRule, pnlDecision, type TrailingState } from "./policies.ts";
 import type { SignalBook } from "../signals/signalEngine.ts";
 import type { ExitEngine } from "../signals/exitEngine.ts";
+import { entryFilterPass, type EntryFilter, type TfSnapshot } from "../features/indicators.ts";
 
 export type SessionPhase = "warmup" | "active" | "closing" | "ended";
 
@@ -122,14 +123,16 @@ export function balancedSample(sizes: number[], n: number, seed: number): number
 export function gridCombos(c: Config, opts: { allowSignalModes?: boolean } = {}): PositionSpec[] {
   const g = c.grid;
   const policies = expandExitPolicies(g.exit_policies);
-  const dims = [g.strategies.length, g.bins_per_side.length, g.sides.length, policies.length, g.variants.length];
+  const filters = g.entry_filter;
+  const dims = [g.strategies.length, g.bins_per_side.length, g.sides.length, policies.length, g.variants.length, filters.length];
   const sample = g.sampling.mode === "full" ? balancedSample(dims, Number.MAX_SAFE_INTEGER, 0) : balancedSample(dims, g.sampling.max_combos, g.sampling.seed);
   const wide = g.variant_params.wide_range;
   const modes = g.entry_modes.filter((m) => m !== "meridian_preset" && (opts.allowSignalModes || !SIGNAL_MODES.has(m)));
   const out: PositionSpec[] = [];
   for (const entryMode of modes)
     for (const cooldownEnabled of COOLDOWN_MODES.has(entryMode) ? g.cooldown_enabled : [null])
-    for (const [si, bi, di, pi, vi] of sample) {
+    for (const [si, bi, di, pi, vi, fi] of sample) {
+      const entryFilter = filters[fi];
       const variant = g.variants[vi];
       const isWide = variant === "wide_range";
       const strategy = isWide ? wide.strategy : g.strategies[si];
@@ -137,13 +140,14 @@ export function gridCombos(c: Config, opts: { allowSignalModes?: boolean } = {})
       const sides = g.sides[di];
       const exitPolicy = policies[pi];
       out.push({
-        strategy, sides, exitPolicy, entryMode, variant, cooldownEnabled,
+        strategy, sides, exitPolicy, entryMode, variant, cooldownEnabled, entryFilter,
         binsBelow: sides === "base_only" ? 0 : n,
         binsAbove: sides === "quote_only" ? 0 : n,
         capitalUsd: c.simulation.virtual_capital_usd,
         combo: {
           entry_mode: entryMode, strategy, bins_per_side: n, sides, exit_policy: exitPolicyLabel(exitPolicy), variant,
           sampling: g.sampling.mode,
+          entry_filter: entryFilter,
           ...(cooldownEnabled !== null ? { cooldown: cooldownEnabled } : {}),
           ...(variant !== "none" && variant !== "wide_range" ? { variant_params: g.variant_params[variant] } : {}),
         },
@@ -166,6 +170,8 @@ export interface GridStats {
   preset: { evaluated: number; passed: number; opened: number; partial: number };
   /** signal-mode positions not opened because the pool was in cooldown (phase 10) */
   cooldownSkips: number;
+  /** positions not opened because their indicator entry filter did not pass, by filter and reason (phase 13) */
+  filterSkips: Record<string, number>;
   capped: boolean;
 }
 
@@ -179,6 +185,8 @@ export interface GridSignals {
   presetInputs?: (pool: string, t: number, sim: PoolSimulator, windowMinutes: number) => PresetInputs | null;
   /** pool memory: cooldown of a pool (or its risk token) at t (phase 10) */
   memory?: { poolCooldown(pool: string, t: number): { until: number; reason: string } | null };
+  /** chart indicators for the entry filters (phase 13) */
+  indicators?: { at(pool: string, t: number): Record<string, TfSnapshot> | null };
   /** preset override (tests); default: loaded from config presets.meridian */
   preset?: MeridianPreset;
 }
@@ -211,7 +219,7 @@ export class GridRunner {
   readonly stats: GridStats = {
     cohorts: 0, requested: 0, skippedPools: 0, rebalances: 0, policyExits: 0, rebalanceNotWorth: 0, signalEntries: {}, pnlExits: {},
     variantActions: { partial_harvest: 0, fee_compounding: 0, single_sided_reseed: 0 },
-    preset: { evaluated: 0, passed: 0, opened: 0, partial: 0 }, cooldownSkips: 0, capped: false,
+    preset: { evaluated: 0, passed: 0, opened: 0, partial: 0 }, cooldownSkips: 0, filterSkips: {}, capped: false,
   };
 
   constructor(
@@ -276,12 +284,28 @@ export class GridRunner {
       const sig = this.signals?.book.latestFor(sim.meta.pool, ts) ?? null;
       const rec = sig?.recommendation ?? null;
       const cooldown = this.signals?.memory?.poolCooldown(sim.meta.pool, ts) ?? null;
+      const ind = this.signals?.indicators?.at(sim.meta.pool, ts) ?? null;
+      const filterOk = new Map<string, boolean>();
       let taken = false;
       for (const spec of this.combos) {
         if (!this.admits(spec.entryMode, sig?.action ?? null)) continue;
         if (spec.cooldownEnabled && cooldown) {
           this.stats.cooldownSkips++;
           continue;
+        }
+        const ef = spec.entryFilter ?? "none";
+        if (ef !== "none") {
+          let ok = filterOk.get(ef);
+          if (ok === undefined) {
+            const r = entryFilterPass(ef as EntryFilter, ind, this.c.indicators);
+            ok = r.pass;
+            filterOk.set(ef, ok);
+            if (!ok) {
+              const k = `${ef}:${r.reason === "no_data" ? "no_data" : "not_passed"}`;
+              this.stats.filterSkips[k] = (this.stats.filterSkips[k] ?? 0) + 1; // counted per pool and cohort
+            }
+          }
+          if (!ok) continue;
         }
         if (this.full()) return;
         const matches = !!rec && rec.strategy === spec.strategy && rec.sides === spec.sides &&
