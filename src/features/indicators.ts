@@ -113,7 +113,7 @@ export interface TfSnapshot {
   pctB: number | null;
   pctBRecent: (number | null)[];
   stDir: 1 | -1 | null;
-  /** bars since the Supertrend direction last changed (0 = flipped on the last bar) */
+  /** bars since the Supertrend direction last changed (0 = flipped on the last bar; a lower bound when no flip is in the data) */
   stBarsSinceFlip: number | null;
   fib: ReturnType<typeof fibPosition>;
 }
@@ -128,8 +128,9 @@ export function snapshotOf(cs: Candle[], ic: Config["indicators"]): TfSnapshot {
   const last = st[st.length - 1];
   if (last !== null && last !== undefined) {
     flip = 0;
+    // bars in the current direction; when it never flipped within the data this is a lower bound
+    // (every bar since the warm-up), which is still "no recent break" for the entry filter
     for (let i = st.length - 2; i >= 0 && st[i] === last; i--) flip++;
-    if (st.slice(0, st.length - 1 - flip).every((x) => x === null)) flip = null; // never flipped within data
   }
   return {
     bars: cs.length,

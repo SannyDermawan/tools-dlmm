@@ -115,6 +115,18 @@ export function shapeFromShares(shares: number[], lower: number, anchor: number 
   return { shape: corr >= 0.5 ? "bidask" : corr <= -0.5 ? "curve" : "spot", corr };
 }
 
+/**
+ * Anchor bin for the shape of a range: the price-side edge for one-sided deposits (quote sits below
+ * the price, base above it), the active bin at open for two-sided ones (range midpoint when
+ * unknown). Anchoring on the price at scan time misreads one-sided shapes once the price moved.
+ */
+export function shapeAnchor(lower: number, upper: number, sides: Sides | null, activeAtOpen: number | null): number | null {
+  if (sides === "quote_only") return upper;
+  if (sides === "base_only") return lower;
+  if (activeAtOpen !== null && activeAtOpen >= lower && activeAtOpen <= upper) return activeAtOpen;
+  return null;
+}
+
 /** lp_wallets from closed real positions (only closed ones have a final result). */
 export function recomputeWallets(db: Db, c: Config["real_lp"]["smart"], now = Date.now()): number {
   const rows = db.all<{ wallet: string; n: number; closed: number; win: number | null; avg: number | null; total: number | null; last: number | null }>(
@@ -221,11 +233,17 @@ export class RealLpCollector {
         if (!acc) continue;
         try {
           const p = decodePosition(acc.data);
-          const anchor = db.get<{ a: number }>(
+          // provisional: sides are not known yet; a range fully below / above the current price is
+          // one-sided on that side. Re-classified once the deposits (sides) and the open are known.
+          const active = db.get<{ a: number }>(
             "SELECT active_bin a FROM pool_snapshots WHERE pool = ? AND source = 'chain' ORDER BY ts DESC LIMIT 1", p.lbPair,
           )?.a ?? null;
-          const s = shapeFromShares(p.shares, p.lowerBinId, anchor);
-          db.run("UPDATE lp_position_sightings SET shape = ?, shape_detail = ? WHERE position = ?", s.shape, JSON.stringify({ corr: s.corr, bins: p.shares.length }), keys[k]);
+          const side: Sides | null = active === null ? null : p.upperBinId < active ? "quote_only" : p.lowerBinId > active ? "base_only" : "two_sided";
+          const s = shapeFromShares(p.shares, p.lowerBinId, shapeAnchor(p.lowerBinId, p.upperBinId, side, active));
+          db.run(
+            "UPDATE lp_position_sightings SET shape = ?, shape_detail = ? WHERE position = ?",
+            s.shape, JSON.stringify({ corr: s.corr, lower: p.lowerBinId, upper: p.upperBinId, shares: p.shares }), keys[k],
+          );
           if (s.shape) n++;
         } catch (e) {
           this.d.log.debug({ position: keys[k], err: (e as Error).message }, "position decode failed");
@@ -273,6 +291,28 @@ export class RealLpCollector {
       this.d.log.debug({ position, err: (e as Error).message }, "position events failed");
       return false;
     }
+  }
+
+  /** Final shape of each position with scanned shares: anchored by its sides and the price at open. */
+  classifyShapes(): number {
+    const { db } = this.d;
+    const rows = db.all<{ position: string; sides: Sides | null; open_active_bin: number | null; detail: string }>(
+      `SELECT r.position, r.sides, r.open_active_bin, s.shape_detail detail FROM real_lp_positions r
+       JOIN lp_position_sightings s ON s.position = r.position WHERE s.shape_detail IS NOT NULL`,
+    );
+    let n = 0;
+    for (const r of rows) {
+      const d = JSON.parse(r.detail) as { lower?: number; upper?: number; shares?: number[] };
+      if (!d.shares || d.lower === undefined || d.upper === undefined) {
+        // labelled by an older scan without the raw shares: the anchor may have been wrong -> unknown
+        db.run("UPDATE real_lp_positions SET shape = NULL WHERE position = ?", r.position);
+        continue;
+      }
+      const s = shapeFromShares(d.shares, d.lower, shapeAnchor(d.lower, d.upper, r.sides, r.open_active_bin));
+      db.run("UPDATE real_lp_positions SET shape = ? WHERE position = ?", s.shape, r.position);
+      n++;
+    }
+    return n;
   }
 
   /** Pool state at open from our own data (snapshot <= 60 s before the open) and our score then. */
@@ -365,11 +405,6 @@ export class RealLpCollector {
       st.walletQueries++;
       st.positionsStored += await this.fetchWallet(q.wallet, q.pool, now);
     }
-    // shapes found by the scans go to the positions
-    db.run(
-      `UPDATE real_lp_positions SET shape = (SELECT shape FROM lp_position_sightings s WHERE s.position = real_lp_positions.position)
-       WHERE shape IS NULL AND EXISTS (SELECT 1 FROM lp_position_sightings s WHERE s.position = real_lp_positions.position AND s.shape IS NOT NULL)`,
-    );
     if (config.real_lp.fetch_events) {
       // closed positions whose whole life falls inside our own data (realism candidates) first
       const cands = db.all<{ position: string; closed_at: number | null }>(
@@ -382,6 +417,7 @@ export class RealLpCollector {
       for (const c of cands) if (await this.fetchEvents(c.position, c.closed_at)) st.eventFetches++;
     }
     this.fillOpenState();
+    this.classifyShapes();
     recomputeWallets(db, config.real_lp.smart, now);
     log.info(st, "real LP scan");
     return st;

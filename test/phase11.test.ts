@@ -77,6 +77,17 @@ describe("distribution shape from liquidity shares", () => {
         expect(shapeFromShares(s, lower, 1000).shape).toBe(strategy);
       });
   it("too few bins -> unknown", () => expect(shapeFromShares([1, 0, 0], 0, 0).shape).toBeNull());
+  it("one-sided ranges are anchored at their price-side edge, not at a moved price", async () => {
+    const { shapeAnchor } = await import("../src/collectors/realLp.ts");
+    expect(shapeAnchor(931, 1000, "quote_only", 960)).toBe(1000);
+    expect(shapeAnchor(1000, 1069, "base_only", 1030)).toBe(1000);
+    expect(shapeAnchor(980, 1020, "two_sided", 1005)).toBe(1005);
+    expect(shapeAnchor(980, 1020, "two_sided", null)).toBeNull();
+    // a quote-only bid-ask read with the price moved into the range would look like curve
+    const s = shares("bidask", "quote_only", 69);
+    expect(shapeFromShares(s, 931, 1000).shape).toBe("bidask");
+    expect(shapeFromShares(s, 931, 940).shape).not.toBe("bidask");
+  });
 });
 
 describe("smart LP wallets (addendum 4.3)", () => {

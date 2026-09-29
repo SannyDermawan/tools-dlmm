@@ -95,6 +95,11 @@ describe("entry filters", () => {
     expect(s.stDir).toBe(-1);
     expect(s.stBarsSinceFlip).toBeGreaterThan(0);
     expect(s.stBarsSinceFlip).toBeLessThan(15);
+    // a steady trend without any flip in the data: "no recent break", not "no data"
+    const steady = snapshotOf(candles(Array.from({ length: 40 }, (_, i) => 100 + i)), ic());
+    expect(steady.stDir).toBe(1);
+    expect(steady.stBarsSinceFlip).toBeGreaterThanOrEqual(ic().filter_lookback_bars);
+    expect(entryFilterPass("supertrend_break", { "15m": steady }, ic())).toEqual({ pass: false, reason: "no fresh supertrend up-break" });
   });
   it("grid: a filter that does not pass skips its combinations only", () => {
     const c = cfg();
