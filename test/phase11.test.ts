@@ -167,3 +167,33 @@ describe("realism spec (addendum 4.3)", () => {
     expect(realSpec(row({ sides: "quote_only", lower_bin: 40, upper_bin: 80 }))).toEqual({ skip: "quote-only range detached from the price" });
   });
 });
+
+describe("calibration on real LP positions (kept separate from simulator data)", () => {
+  it("joins each real position with our latest signal at or before its open; never a later one", async () => {
+    const { buildDataset } = await import("../src/calibration/dataset.ts");
+    const { registerConfigVersion } = await import("../src/db/repo.ts");
+    const db = newDb();
+    const c = cfg();
+    const cv = registerConfigVersion(db, loadConfig());
+    db.insert("sessions", { session_id: "S", kind: "session", start_at: 0, end_at: 10 * HOUR, status: "completed", config_version: cv });
+    db.insert("pools", { pool: "P", token_x: "T", token_y: "USD", decimals_x: 6, decimals_y: 6, bin_step: 100, category: "memecoin", first_seen_at: 0, last_checked_at: 0 });
+    db.insert("session_pools", { session_id: "S", pool: "P", rank: 1, added_at: 0 });
+    const sig = (id: string, ts: number, edge: number) =>
+      db.insert("signals", { signal_id: id, session_id: "S", pool: "P", ts, action: "PANTAU", taken: 0, config_version: cv, payload: JSON.stringify({ scores: { edge, regime: 50, flow: null, attention: null, competition: 40, safety: 90 }, final_score: 60 }) });
+    sig("s1", HOUR, 70);
+    sig("s2", HOUR + 120_000, 99); // after both opens
+    db.insert("sim_positions", {
+      position_id: "x", session_id: "S", signal_id: "s1", pool: "P", grid_combo: "{}", entry_mode: "signal_watch", strategy: "spot", sides: "two_sided",
+      bins_below: 1, bins_above: 1, capital_usd: 1000, requested_at: 0, gap_tainted: 0, config_version: cv, status: "closed",
+    });
+    const real = (id: string, opened: number, pct: number) =>
+      upsertRealPosition(db, { position: id, wallet: "W", pool: "P", opened_at: opened, closed_at: opened + HOUR, is_closed: 1, net_pnl_usd: pct, net_pnl_pct: pct, source: "t", fetched_at: 0 });
+    real("r1", HOUR + 60_000, 4);
+    real("r2", HOUR + 90_000, 900); // clipped to 300
+    real("r3", 20 * HOUR, 1); // outside the session
+    const ds = buildDataset(db, c, "real_lp");
+    expect(ds.observations).toHaveLength(1);
+    expect(ds.observations[0]).toMatchObject({ pool: "P", positions: 2, y: (4 + 300) / 2, win: 1 });
+    expect(ds.observations[0].scores.edge).toBe(70); // s1, not the later s2
+  });
+});

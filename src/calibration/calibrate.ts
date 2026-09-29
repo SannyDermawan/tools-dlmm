@@ -53,10 +53,10 @@ function currentWeights(lc: LoadedConfig, cat: PoolCategory): Weights {
  * config_version is written only when the candidate beats the current weights in walk-forward
  * and on the holdout, and its selected pools still beat the average pool (baseline).
  */
-export function calibrate(db: Db, lc: LoadedConfig, o: { force?: boolean; write?: boolean; outDir?: string; now?: number } = {}): CalibrationResult {
+export function calibrate(db: Db, lc: LoadedConfig, o: { force?: boolean; write?: boolean; outDir?: string; now?: number; source?: "sim" | "real_lp" } = {}): CalibrationResult {
   const c = lc.config;
   const k = c.calibration;
-  const ds = buildDataset(db, c);
+  const ds = buildDataset(db, c, o.source ?? "sim");
   const sessions = ds.dataSessions.map((s) => s.id);
   const holdoutIds = new Set(k.holdout_sessions > 0 ? sessions.slice(-k.holdout_sessions) : []);
   const trainIds = sessions.filter((s) => !holdoutIds.has(s));
@@ -118,7 +118,8 @@ export function calibrate(db: Db, lc: LoadedConfig, o: { force?: boolean; write?
   const stamp = new Date(now).toISOString().replace(/[-:T]/g, "").slice(0, 12);
   // never write weights learned from too few sessions, even when the evaluation was forced
   if (accepted && o.write && !insufficient) {
-    const profile = `cal_${stamp}`;
+    const src = o.source ?? "sim";
+    const profile = src === "real_lp" ? `cal_real_${stamp}` : `cal_${stamp}`;
     const full = (w: Weights, fallback: Weights) => {
       const src = Object.keys(w).length ? w : fallback;
       return Object.fromEntries(MODULES.map((m) => [m, Math.round((src[m] ?? 0) * 10) / 10]));
@@ -136,7 +137,7 @@ export function calibrate(db: Db, lc: LoadedConfig, o: { force?: boolean; write?
     newConfigPath = join(dir, `${profile}.yaml`);
     writeFileSync(newConfigPath, `# Calibrated weights (dlmm calibrate, ${new Date(now).toISOString()}).\n# Use with: npm run dlmm -- -c ${newConfigPath.replace(/\\/g, "/")} session start\n` + YAML.stringify(doc));
     const nc = loadConfig(newConfigPath);
-    newConfigVersion = registerConfigVersion(db, nc, `calibrated from ${sessions.length} data sessions; accepted: ${categories.filter((x) => x.accepted).map((x) => x.category).join(", ")}`);
+    newConfigVersion = registerConfigVersion(db, nc, `calibrated (${src}) from ${sessions.length} data sessions; accepted: ${categories.filter((x) => x.accepted).map((x) => x.category).join(", ")}`);
   }
 
   // report

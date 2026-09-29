@@ -610,10 +610,13 @@ program
   .description("fit module weights from the journal, validate walk-forward + holdout, write a new config_version if it is better")
   .option("--write", "write config/calibrated/<profile>.yaml when accepted")
   .option("--force", "evaluate even with fewer sessions than calibration.min_sessions (never writes on its own)")
+  .option("--source <source>", "sim (simulator baseline positions) or real_lp (real positions of other wallets, kept separate)", "sim")
   .action(async (opts) => {
+    if (opts.source !== "sim" && opts.source !== "real_lp") throw new Error("--source must be sim or real_lp");
     const app = createApp(cfgPath());
     const { calibrate } = await import("./calibration/calibrate.ts");
-    const r = calibrate(app.db, app.lc, { force: opts.force, write: opts.write });
+    const r = calibrate(app.db, app.lc, { force: opts.force, write: opts.write, source: opts.source });
+    console.log(`source: ${opts.source}`);
     console.log(`status: ${r.status}  data sessions: ${r.dataSessions}  observations: ${r.observations}`);
     for (const n of r.notes) console.log(`  note: ${n}`);
     for (const c of r.categories) {
