@@ -138,7 +138,13 @@ export async function runLiveSession(app: AppContext, o: LiveSessionOptions = {}
     try {
       const { TelegramApi } = await import("../notify/telegramApi.ts");
       const { TelegramService, accessFromEnv } = await import("../notify/service.ts");
-      const svc = new TelegramService(app.db, tgc, new TelegramApi(token), accessFromEnv(), log.child({ component: "telegram" }), cfg.rpc.quota.warn_at_pct);
+      let explain;
+      if (cfg.llm.enabled) {
+        const { LlmLayer, briefingExplainer } = await import("../llm/layer.ts");
+        const { providerFromConfig } = await import("../llm/client.ts");
+        explain = briefingExplainer(new LlmLayer(app.db, cfg.llm, providerFromConfig(cfg.llm), log));
+      }
+      const svc = new TelegramService(app.db, tgc, new TelegramApi(token), accessFromEnv(), log.child({ component: "telegram" }), cfg.rpc.quota.warn_at_pct, explain);
       tgRun = svc.run(tgAbort.signal).catch((e) => log.warn({ err: (e as Error).message }, "telegram stopped"));
     } catch (e) {
       log.warn({ err: (e as Error).message }, "telegram not started");

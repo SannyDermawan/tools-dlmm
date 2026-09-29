@@ -244,6 +244,8 @@ grid:
     single_sided_reseed: { max_reseeds: 3 }
     wide_range: { bins_per_side: [69, 100, 150], strategy: spot }  # own widths; bins_per_side ignored
   cooldown_enabled: [true, false] # signal modes run with and without pool cooldown (baseline: never)
+  entry_filter: [none, supertrend_break, rsi_reversal, bollinger_reversion]  # indicator entry filters (phase 13);
+                                # a dimension of the balanced sample: each combination gets one filter
   sampling:                     # the full grid is huge: balanced random sample of combinations,
     mode: balanced              # every level of every dimension appears ~equally; the same sample
     max_combos: 180             # is used for every pool and entry mode (paired comparisons)
@@ -264,6 +266,45 @@ memory:                          # pool / token memory across sessions (phase 10
     oor_hours: 12
     modes: [signal_enter]        # closes of these entry modes drive the cooldown
   min_positions_for_features: 5  # pool history features need at least this many positions
+
+indicators:                      # chart indicators from our own OHLCV (phase 13); regime features + entry filters
+  enabled: true
+  timeframes: [5m, 15m]          # 15m is aggregated from the stored 5m candles
+  rsi_period: 14
+  rsi_low: 30
+  rsi_high: 70
+  bb_period: 20
+  bb_k: 2
+  st_period: 10                  # Supertrend ATR period
+  st_mult: 3
+  fib_lookback: 48               # bars of the swing for the Fibonacci position
+  filter_timeframe: 15m          # entry filters read this timeframe
+  filter_lookback_bars: 3        # a break / reversal must be this recent
+
+llm:                             # conditional LLM layer (phase 13.2): features + explanations only, never decisions
+  enabled: false                 # also needs the activation condition below
+  provider: anthropic            # anthropic | openai_compatible | local (OpenAI-style /chat/completions)
+  model: claude-opus-5-5
+  base_url: null                 # openai_compatible / local only, e.g. http://127.0.0.1:11434/v1
+  api_key_env: ANTHROPIC_API_KEY # name of the .env variable holding the key (local: may be empty)
+  effort: low                    # anthropic: classification-style tasks
+  temperature: 0                 # openai_compatible / local only (current Claude models reject sampling params)
+  max_tokens: 16000
+  timeout_ms: 120000
+  price_per_mtok: { input: 4, output: 20 }   # USD, for the budget (claude-opus-5-5 list price)
+  daily_budget_usd: 1.0          # stop calling for the rest of the UTC day when reached
+  max_calls_per_hour: 60
+  prompt_version: p1             # part of config_version; bump when a prompt changes
+  cache_hours: 6                 # same role + input within this window -> cached answer, no call
+  max_input_chars: 6000          # external text is sanitized and cut to this size
+  activation:                    # addendum 6.2: only after enough comparison data without the LLM
+    min_clean_sessions: 10       # finished live sessions since `since` ...
+    since: "2026-09-29"
+    max_gap_minutes: 5           # ... with no pool_state / bin_snapshot gap longer than this
+  roles: { token_social: true, narrative: true, explainer: true }
+  use_in_scoring: false          # LLM features in the safety / attention modules (compare with a replay variant)
+  interval_minutes: 60           # token features refreshed this often per token
+  max_tokens_per_round: 20       # risk tokens scored per round
 
 telegram:                        # read-only notifications + commands (phase 12)
   enabled: false                 # needs TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_ALLOWED_USER_IDS in .env

@@ -299,3 +299,35 @@ export function safetyMemoryMarkdown(db: Db, simSessionId: string, dataSessionId
     : "Jupiter audit: no data in this data session (collected from phase 10 sessions on).");
   return out.join("\n");
 }
+
+/**
+ * Phase 13: indicator entry filters vs no filter, per entry mode (clean closed positions). The
+ * filter dimension is part of the balanced grid sample, so each filter level covers comparable
+ * combinations; "diff" is the filter's mean net % minus the same mode's "none" mean.
+ */
+export function entryFilterMarkdown(db: Db, simSessionId: string): string {
+  const rows = db.all<{ mode: string; filter: string; n: number; win: number | null; net: number | null }>(
+    `SELECT p.entry_mode mode, COALESCE(p.entry_filter, 'none') filter, COUNT(*) n, AVG(r.net_pnl_usd > 0) win, AVG(r.net_pnl_pct) net
+     FROM sim_positions p JOIN sim_results r USING(position_id)
+     WHERE p.session_id = ? AND p.status = 'closed' AND p.gap_tainted = 0 AND p.entry_mode != 'meridian_preset'
+     GROUP BY p.entry_mode, filter ORDER BY p.entry_mode, filter != 'none', filter`,
+    simSessionId,
+  );
+  if (!rows.some((r) => r.filter !== "none")) return "No indicator entry filter ran in this session (grid.entry_filter).";
+  const f = (v: number | null, d = 3) => (v === null ? "-" : v.toFixed(d));
+  const out = ["| entry mode | entry filter | positions | win | avg net % | diff vs none (pp) |", "|---|---|--:|--:|--:|--:|"];
+  for (const r of rows) {
+    const none = rows.find((x) => x.mode === r.mode && x.filter === "none")?.net ?? null;
+    out.push(`| ${r.mode} | ${r.filter} | ${r.n} | ${r.win === null ? "-" : (r.win * 100).toFixed(0) + "%"} | ${f(r.net)} | ${r.filter === "none" || none === null || r.net === null ? "-" : f(r.net - none)} |`);
+  }
+  const notes = db.get<{ notes: string | null }>("SELECT notes FROM sessions WHERE session_id = ?", simSessionId)?.notes;
+  try {
+    const skips = notes ? (JSON.parse(notes).grid?.filterSkips as Record<string, number> | undefined) : undefined;
+    if (skips && Object.keys(skips).length)
+      out.push("", `Pool entries skipped by a filter (per pool and cohort): ${Object.entries(skips).map(([k, v]) => `${k} ${v}`).join(", ")}.`);
+  } catch {
+    /* notes without JSON */
+  }
+  out.push("", "A filter keeps weight only if it beats `none` consistently across sessions (addendum 6.1); one session proves nothing.");
+  return out.join("\n");
+}

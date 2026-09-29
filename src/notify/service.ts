@@ -50,6 +50,7 @@ export class TelegramService {
   private batchStartedAt: number | null = null;
   private wsDownSince: number | null = null;
   private errorSamples: { ts: number; errors: number }[] = [];
+  private pendingBriefing: Promise<void> | null = null;
 
   constructor(
     private readonly db: Db,
@@ -58,6 +59,8 @@ export class TelegramService {
     private readonly access: TelegramAccess,
     private readonly log?: Logger,
     private readonly quotaWarnPct?: number,
+    /** phase 13.2 explainer (optional): Indonesian summary appended to the daily briefing */
+    private readonly explain?: (subject: string, text: string) => Promise<string | null>,
   ) {}
 
   // ------------------------------------------------------------------ state
@@ -208,7 +211,15 @@ export class TelegramService {
     const sessions24 = this.db.get<{ n: number }>("SELECT COUNT(*) n FROM sessions WHERE kind = 'session' AND end_at > ?", now - 86_400_000)?.n ?? 0;
     const body = last ? formatSessionResult(this.db, last.session_id, "Last session") : "No finished session yet.";
     const real = this.db.get<{ n: number; smart: number }>("SELECT (SELECT COUNT(*) FROM real_lp_positions) n, (SELECT COUNT(*) FROM lp_wallets WHERE status_smart = 1) smart");
-    this.enqueue("briefing", [`☀️ Daily briefing ${day}`, `${sessions24} session(s) finished in the last 24 h.`, "", body, "", `Real LP data: ${real?.n ?? 0} positions, ${real?.smart ?? 0} smart wallets.`].join("\n"));
+    const lines = [`☀️ Daily briefing ${day}`, `${sessions24} session(s) finished in the last 24 h.`, "", body, "", `Real LP data: ${real?.n ?? 0} positions, ${real?.smart ?? 0} smart wallets.`];
+    if (this.explain && last) {
+      // explainer is async: send the briefing when it returns (or without it on failure)
+      this.pendingBriefing = this.explain(last.session_id, body)
+        .then((x) => this.enqueue("briefing", [...lines, ...(x ? ["", "🗒 Ringkasan (LLM):", x] : [])].join("\n")))
+        .catch(() => this.enqueue("briefing", lines.join("\n")));
+      return;
+    }
+    this.enqueue("briefing", lines.join("\n"));
   }
 
   // ------------------------------------------------------------------ commands
@@ -269,6 +280,10 @@ export class TelegramService {
     this.watchSignals(now);
     this.watchAlerts(now);
     this.watchBriefing(now);
+    if (this.pendingBriefing) {
+      await this.pendingBriefing;
+      this.pendingBriefing = null;
+    }
     await this.flush(now);
   }
 

@@ -267,6 +267,7 @@ describe("grid: pool cooldown dimension", () => {
     c.grid.exit_policies = [{ type: "hold_to_session_end" }] as never;
     c.grid.variants = ["none"];
     c.grid.cooldown_enabled = [true, false];
+    c.grid.entry_filter = ["none"];
     const sink = new MemorySink();
     let n = 0;
     const sim = new PoolSimulator(meta("P"), c, sink, () => `P-${++n}`);

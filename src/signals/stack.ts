@@ -71,6 +71,7 @@ export function buildDecisionStack(
     book,
     exitEngine,
     memory,
+    indicators: scoring.indicators ?? undefined,
     expectedFeeUsd: (pool, valueUsd) => {
       const e = latestScore.get(pool)?.edge;
       if (!e) return null;

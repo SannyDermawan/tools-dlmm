@@ -476,7 +476,14 @@ const tgSetup = async () => {
   if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set in .env");
   const api = new TelegramApi(token);
   const access = accessFromEnv();
-  return { app, api, access, svc: new TelegramService(app.db, app.lc.config.telegram, api, access, app.log, app.lc.config.rpc.quota.warn_at_pct) };
+  const c = app.lc.config;
+  let explain;
+  if (c.llm.enabled) {
+    const { LlmLayer, briefingExplainer } = await import("./llm/layer.ts");
+    const { providerFromConfig } = await import("./llm/client.ts");
+    explain = briefingExplainer(new LlmLayer(app.db, c.llm, providerFromConfig(c.llm), app.log));
+  }
+  return { app, api, access, svc: new TelegramService(app.db, c.telegram, api, access, app.log, c.rpc.quota.warn_at_pct, explain) };
 };
 tgCmd
   .command("run")
@@ -509,6 +516,48 @@ tgCmd
     const ups = await api.getUpdates(undefined, 0);
     if (!ups.length) console.log("no recent messages: send /start to the bot, then run this again");
     for (const u of ups) if (u.message) console.log(`chat ${u.message.chat.id} (${u.message.chat.type})  user ${u.message.from?.id} @${u.message.from?.username ?? "-"}: ${u.message.text ?? ""}`);
+    app.db.close();
+  });
+
+const llmCmd = program.command("llm").description("conditional LLM layer (phase 13.2): features and explanations only");
+llmCmd
+  .command("status")
+  .description("activation condition, budget, recent calls")
+  .action(async () => {
+    const app = createApp(cfgPath());
+    const { LlmLayer } = await import("./llm/layer.ts");
+    const layer = new LlmLayer(app.db, app.lc.config.llm, null);
+    const a = layer.activation();
+    const b = layer.budget();
+    console.log(`llm: ${app.lc.config.llm.enabled ? "enabled" : "disabled"} (${app.lc.config.llm.provider} ${app.lc.config.llm.model}, prompt ${app.lc.config.llm.prompt_version})`);
+    console.log(`activation: ${a.active ? "ACTIVE" : "inactive"} — ${a.reason} (clean sessions ${a.cleanSessions}/${a.needed})`);
+    console.log(`budget: $${b.spentTodayUsd.toFixed(4)} of $${app.lc.config.llm.daily_budget_usd} today, ${b.callsLastHour} calls in the last hour (${b.reason})`);
+    for (const r of app.db.all<{ ts: number; role: string; subject: string | null; valid: number; error: string | null; cost_usd: number }>("SELECT ts, role, subject, valid, error, cost_usd FROM llm_calls ORDER BY id DESC LIMIT 10"))
+      console.log(`  ${new Date(r.ts).toISOString()} ${r.role.padEnd(12)} ${(r.subject ?? "").slice(0, 12).padEnd(12)} ${r.valid ? "valid  " : "INVALID"} $${r.cost_usd.toFixed(4)} ${r.error ?? ""}`);
+    app.db.close();
+  });
+llmCmd
+  .command("test")
+  .description("one manual call (skips only the activation condition; the switch, budget and validation still apply)")
+  .option("--token <mint>", "token_social on this mint")
+  .option("-s, --session <id>", "explainer on this session's result")
+  .action(async (opts) => {
+    const app = createApp(cfgPath());
+    const { LlmLayer } = await import("./llm/layer.ts");
+    const { providerFromConfig } = await import("./llm/client.ts");
+    const c = app.lc.config;
+    const layer = new LlmLayer(app.db, c.llm, providerFromConfig(c.llm), app.log);
+    if (opts.token) {
+      const { LlmFeatureCollector } = await import("./llm/collector.ts");
+      const { publicHttp } = await import("./collectors/extraCollectors.ts");
+      const col = new LlmFeatureCollector(app.db, c, layer, new Map(), publicHttp(c, c.api.dexscreener_base_url, "dexscreener", { log: app.log }), app.log);
+      const data = await col.tokenData(opts.token);
+      console.log("input:", JSON.stringify(data).slice(0, 600));
+      console.log(JSON.stringify(await layer.tokenSocial(opts.token, data, { force: true }), null, 2));
+    } else if (opts.session) {
+      const { formatSessionResult } = await import("./notify/format.ts");
+      console.log(JSON.stringify(await layer.explain(opts.session, { hasil_sesi: formatSessionResult(app.db, opts.session, "Sesi") }, { force: true }), null, 2));
+    } else console.log("pass --token <mint> or --session <id>");
     app.db.close();
   });
 

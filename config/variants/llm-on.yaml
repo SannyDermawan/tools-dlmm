@@ -1,0 +1,8 @@
+# LLM features in the score (addendum 6.2): replay the same data with and without, then compare in
+# `dlmm analyze`. Only meaningful after the activation condition holds (dlmm llm status).
+#   npm run dlmm -- -c config/variants/llm-on.yaml sim replay -s <session>
+extends: default
+config_label: llm-on
+llm:
+  enabled: true
+  use_in_scoring: true
