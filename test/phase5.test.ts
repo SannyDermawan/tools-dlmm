@@ -224,6 +224,46 @@ describe("grid runner with signals", () => {
     expect(runner.stats.rebalanceNotWorth).toBe(oor.length);
   });
 
+  it("gas_aware_horizon_hours scales the expected fee: a longer horizon lets a rebalance through that 2 h would refuse", () => {
+    const run = (horizonHours: number) => {
+      const c = cfg();
+      c.simulation.gas_aware_horizon_hours = horizonHours;
+      c.grid.strategies = ["spot"];
+      c.grid.bins_per_side = [2];
+      c.grid.range_pct = [];
+      c.grid.sides = ["two_sided"];
+      c.grid.exit_policies = [{ type: "rebalance_out_of_range", minutes: 1, max_rebalances: 2 }];
+      c.grid.variants = ["none"];
+      c.grid.sampling.mode = "full";
+      c.grid.entry_modes = ["all_pools_baseline"];
+      const s = new PoolSimulator({ ...META, pool: "A" }, c, new MemorySink(), () => `A-${Math.random()}`);
+      s.onMarket({ quoteUsd: 1, solUsd: 100, priorityMicroLamports: 0 });
+      s.onState(state(0, 0, "A"));
+      s.onBins(snapshot(0, 0, "A"));
+      let fee = 0;
+      const runner = new GridRunner(c, new Map([["A", s]]), new SessionClock(0, { durationMinutes: 60, warmupMinutes: 1, stopNewBeforeEndMinutes: 10, cohortIntervalMinutes: 0 }), undefined, {
+        book: new SignalBook(null, c, "S", "v"), expectedFeeUsd: () => fee,
+      });
+      runner.onTick(60_000);
+      s.onState(state(63_000, 0, "A"));
+      const oor = s.list().filter((p) => p.spec.exitPolicy?.type === "rebalance_out_of_range");
+      s.onState(state(70_000, 30, "A"));
+      const cost = s.estimateRebalanceCostUsd(oor[0].id)!;
+      expect(cost).toBeGreaterThan(0);
+      // the fee over the 2 h edge horizon is two thirds of the cost: refused at 2 h, worth it at 4 h (x2)
+      fee = (cost * 2) / 3;
+      runner.onPoolState("A", 70_000);
+      s.onState(state(131_000, 30, "A"));
+      runner.onPoolState("A", 131_000);
+      return { oor, runner };
+    };
+    const short = run(2);
+    expect(short.oor.every((p) => p.status === "closed" && p.closeReason === "rebalance_out_of_range:rebalance_not_worth")).toBe(true);
+    const long = run(4);
+    expect(long.runner.stats.rebalanceNotWorth).toBe(0);
+    expect(long.runner.stats.rebalances).toBe(long.oor.length);
+  });
+
   it("the gas-aware gate is off when simulation.gas_aware_rebalance is false: it rebalances anyway", () => {
     const c = cfg();
     c.simulation.gas_aware_rebalance = false;

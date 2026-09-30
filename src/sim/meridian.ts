@@ -19,8 +19,8 @@ const presetSchema = z
         max_bin_step: num,
         // Upstream Meridian (fciaf420/meridian, read 2026-09-30) also screens these; ours were
         // missing them. null = off (older presets keep working without setting them).
-        max_volatility: optNum,       // config.js `maxVolatility` (unit: their volatility feature,
-                                       // not necessarily ours -- see volatilityPct() below)
+        max_volatility: optNum,       // config.js `maxVolatility`: the `volatility` field of Meteora's
+                                       // pool-discovery API (not ours, see realizedVolatilityPct)
         max_price_change_pct: optNum, // config.js `maxPriceChangePct` over `fee_window`
         min_token_fees_sol: optNum,   // config.js `minTokenFeesSol`: total gas the token's traders have
                                        // paid, all-time (datapi `fees_sol`); low -> bundled/spam suspicion
@@ -36,6 +36,7 @@ const presetSchema = z
         max_mcap_usd: num,
         max_top10_pct: num,
         max_bot_holders_pct: num,
+        max_bundlers_pct: optNum, // Meridian's screener prompt: skip above 30 % (an LLM rule, not code); null = off
       })
       .strict(),
     strategy: z
@@ -90,10 +91,12 @@ export interface PresetInputs {
   mcapUsd: number | null;
   top10Pct: number | null;
   botHoldersPct: number | null; // Jupiter audit (phase 10)
+  /** bundler supply % (datapi audit; Meridian measures bundlers in the top 100 holders: similar, not identical) */
+  bundlerPct: number | null;
   /** true for pools whose risk side is a bluechip / stable: token filters do not apply */
   bluechip: boolean;
-  /** realized price volatility over the fee window (stddev of log returns, %; our own proxy --
-   *  not a port of Meridian's internal `maxVolatility`, whose exact units are undocumented) */
+  /** realized price volatility over the fee window (stddev of 1-minute log returns, %; our own measure,
+   *  not Meridian's `maxVolatility`, which is the Meteora pool-discovery API's `volatility` field) */
   volatilityPct: number | null;
   /** |price change| over the fee window, % */
   priceChangePct: number | null;
@@ -144,6 +147,7 @@ export function evaluateMeridian(p: MeridianPreset, x: PresetInputs): PresetEval
   tok("mcap", x.mcapUsd, (v) => v >= tf.min_mcap_usd && v <= tf.max_mcap_usd);
   tok("top10", x.top10Pct, (v) => v <= tf.max_top10_pct);
   tok("bot_holders", x.botHoldersPct, (v) => v <= tf.max_bot_holders_pct);
+  if (tf.max_bundlers_pct !== null) tok("bundlers", x.bundlerPct, (v) => v <= tf.max_bundlers_pct!);
   const score = (x.feeActiveTvlPct ?? 0) * 1000 + (x.organic ?? 0) * 10 + (x.volumeUsd ?? 0) / 100 + (x.holders ?? 0) / 100;
   return { pass: failed.length === 0, failed, missing, score };
 }

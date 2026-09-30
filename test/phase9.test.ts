@@ -363,7 +363,7 @@ describe("Meridian preset (addendum 2.3)", () => {
   const good: PresetInputs = {
     feeActiveTvlPct: 0.2, tvlUsd: 50_000, volumeUsd: 5_000, binStep: 100, organic: null, holders: 2_000,
     mcapUsd: 1_000_000, top10Pct: 30, botHoldersPct: null, bluechip: false,
-    volatilityPct: null, priceChangePct: null, tokenFeesSol: null, binUtilization: null,
+    volatilityPct: null, priceChangePct: null, tokenFeesSol: null, binUtilization: null, bundlerPct: null,
   };
 
   it("loads the preset file; exit is one tp_sl_combo with the Meridian defaults", () => {
@@ -404,6 +404,11 @@ describe("Meridian preset (addendum 2.3)", () => {
     const withFees = { ...preset, pool_filter: { ...preset.pool_filter, min_token_fees_sol: 30 } };
     expect(evaluateMeridian(withFees, { ...good, tokenFeesSol: 10 }).failed).toEqual(["token_fees_sol"]);
     expect(evaluateMeridian(withFees, { ...good, tokenFeesSol: 30 }).failed).toEqual([]);
+
+    const withBundlers = { ...preset, token_filter: { ...preset.token_filter, max_bundlers_pct: 30 } };
+    expect(evaluateMeridian(withBundlers, { ...good, bundlerPct: 45 }).failed).toEqual(["bundlers"]);
+    expect(evaluateMeridian(withBundlers, { ...good, bundlerPct: 10 }).failed).toEqual([]);
+    expect(evaluateMeridian(withBundlers, good).missing).toContain("bundlers"); // unknown -> preset_parsial, not a fail
 
     const withUtil = { ...preset, pool_filter: { ...preset.pool_filter, min_bin_utilization: 0.3 } };
     expect(evaluateMeridian(withUtil, { ...good, binUtilization: 0.2 }).failed).toEqual(["bin_utilization"]);

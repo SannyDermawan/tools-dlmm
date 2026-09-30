@@ -1,6 +1,9 @@
 # Yunus (@0xyunss) / EvilPanda flip playbook, as entry mode yunus_flip.
 #
-# Source: public summaries of the playbooks (tweets, unverified). What we simulate:
+# Source: public summaries of the playbooks (tweets, unverified). NOT the code: Meridian's `evil_panda` policy
+# (fciaf420/meridian fork) is a different thing (single-sided SOL Spot 80 % below, Supertrend / volume / mcap
+# entry gate, RSI(2) exit, no flip); the closest public code for the flip is hummingbot's lp_rebalancer.
+# See registry/strategies.yaml. What we simulate:
 #   1. enter with a bid-ask, quote-only position below the price (downside -30 / -50 / -70 / -90 %),
 #   2. hold, no stop loss, until the whole position is converted to the token (price fell through it),
 #   3. flip: redeploy base-only above the new price (an "ask" that sells the token back on the way up),

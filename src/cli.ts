@@ -418,6 +418,24 @@ macroCmd
   });
 
 program
+  .command("registry")
+  .description("strategy registry (roadmap PHASE 1): internal and external strategies, sources, fidelity, cost profile")
+  .option("--status <status>", "implemented | candidate | reference | excluded")
+  .option("--id <id>", "show one strategy in full")
+  .option("--check", "check the registry against grid.entry_modes; exit 1 on a problem")
+  .action(async (opts) => {
+    const { loadRegistry, checkRegistry, registryMarkdown } = await import("./registry/strategies.ts");
+    const reg = loadRegistry();
+    if (opts.check) {
+      const cfg = loadConfig(cfgPath()).config;
+      const problems = checkRegistry(reg, cfg.grid.entry_modes);
+      console.log(problems.length ? problems.join(String.fromCharCode(10)) : `registry ok: ${reg.strategies.length} strategies`);
+      if (problems.length) process.exitCode = 1;
+      return;
+    }
+    console.log(registryMarkdown(reg, { status: opts.status, id: opts.id }));
+  });
+program
   .command("rugs")
   .description("rug post-mortem: what the tokens flagged by the rug detector looked like before the rug, and which entry screens would have caught them")
   .option("--lead <minutes>", "read the features at least this long before the rug", parseFloat, 10)

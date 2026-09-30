@@ -804,7 +804,9 @@ export class GridRunner {
       if (costCheckOn && this.signals?.expectedFeeUsd) {
         const cost = sim.estimateRebalanceCostUsd(p.id);
         const value = sim.valuation(p).valueUsd;
-        const fee = this.signals.expectedFeeUsd(pool, value, ts);
+        let fee = this.signals.expectedFeeUsd(pool, value, ts);
+        // expectedFeeUsd covers the edge horizon; rebalance_out_of_range may ask for a longer one
+        if (fee !== null && pol.type === "rebalance_out_of_range") fee *= (this.c.simulation.gas_aware_horizon_hours * 60) / this.c.scoring.edge.horizon_minutes;
         if (cost !== null && fee !== null && cost >= fee) {
           sim.logExitSignal(p.id, ts, { action: "KELUAR", reason: "rebalance_not_worth", conditions: { costUsd: cost, expectedFeeUsd: fee } });
           sim.close(p.id, `${pol.type}:rebalance_not_worth`, ts);

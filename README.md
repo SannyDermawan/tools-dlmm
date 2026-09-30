@@ -53,6 +53,7 @@ swap stream falls behind and records data gaps.
 | `dlmm lp realism [-s SESSION]` | replay simple real positions in the simulator, compare fee and PnL |
 | `dlmm lp wallets [--smart]` | recompute and list LP wallets / smart LPs |
 | `dlmm lp outcomes [-p POOL...] [--since-hours H]` | real positions that opened while we watched, followed to closure: time to close (Kaplan-Meier) and PnL by width / shape / sides / hold time, censoring-aware |
+| `dlmm registry [--status S] [--id ID] [--check]` | strategy registry (internal + external strategies, sources, fidelity, cost profile); `--check` verifies it against `grid.entry_modes` |
 | `dlmm rugs [--lead MIN]` | rug post-mortem: token features before each detected rug and which entry screens (market cap band, holders, bots, bundlers, authorities, age) would have caught it |
 | `dlmm portfolio -m MODE [-s SESSION...] [-w key=value...]` | sequential account over the stored positions of one entry mode (one at a time, compounding, daily stop) |
 | `dlmm telegram run\|test\|whoami` | read-only Telegram notifier + commands (token and ids in `.env`) |

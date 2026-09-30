@@ -98,7 +98,6 @@ export function buildDecisionStack(
       const winMs = 5 * 60_000; // fixed 5-minute window for this journaled context, independent of any preset
       const volatilityPct = tr ? realizedVolatilityPct(tr.prices, t, winMs) : null;
       const binUtil = tr ? binUtilization(tr.snap) : null;
-      const feeRatePct = tr?.prices.length ? tr.prices[tr.prices.length - 1].feeRate * 100 : null;
       return {
         tokenAgeHours: born !== null && born !== undefined ? Math.max(0, (t - born) / 3_600_000) : null, mcapUsd: a?.mcap_usd ?? null,
         riskIsBase: m ? !bluechip.has(m.tokenX) : undefined,
@@ -106,7 +105,10 @@ export function buildDecisionStack(
         organic: a?.organic_score ?? null, botHoldersPct: a?.bot_holders_pct ?? null, bundlerPct: a?.bundler_holding_pct ?? null,
         volatilityPct, priceChangePct: tr ? priceChangePct(tr.prices, t, winMs) : null, binUtilization: binUtil, tokenFeesSol: a?.fees_sol ?? null,
         volumeAuthScore: tr
-          ? volumeAuthenticity({ tvlUsd: tr.metrics?.tvlUsd ?? null, volumeUsd: tr.metrics?.volume1h ?? null, feeRatePct }, c.simulation.volume_authenticity)
+          ? volumeAuthenticity(
+              { tvlUsd: tr.metrics?.tvlUsd ?? null, volume24hUsd: tr.metrics?.volume24h ?? null, fee1hUsd: tr.metrics?.fee1h ?? null, volume1hUsd: tr.metrics?.volume1h ?? null },
+              c.simulation.volume_authenticity,
+            )?.score ?? null
           : null,
       };
     },
@@ -215,6 +217,7 @@ export function presetInputsOf(
     mcapUsd: sec?.supply_ui && tokenUsd !== null ? sec.supply_ui * tokenUsd : (au?.mcap_usd ?? null),
     top10Pct: sec?.top10_pct ?? au?.top_holders_pct ?? null,
     botHoldersPct: au?.bot_holders_pct ?? null,
+    bundlerPct: au?.bundler_holding_pct ?? null,
     bluechip: token === null,
     volatilityPct: realizedVolatilityPct(tr.prices, t, winMs),
     priceChangePct: priceChangePct(tr.prices, t, winMs),

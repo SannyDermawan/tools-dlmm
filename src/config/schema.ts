@@ -395,13 +395,19 @@ export const ConfigSchema = z
         avoid_bin_array_init: z.boolean(),
         max_bins_per_position: z.number().int().min(1),
         gas_aware_rebalance: z.boolean(),
+        gas_aware_horizon_hours: pos,
         volume_authenticity: z
           .object({
-            max_volume_tvl_ratio: pos,
-            fee_rate_min_pct: nonneg,
-            fee_rate_max_pct: pos,
-            low_tvl_usd: pos,
-            low_tvl_volume_tvl_ratio: pos,
+            suspicious_volume_tvl: pos,
+            suspicious_penalty: nonneg,
+            elevated_volume_tvl: pos,
+            elevated_penalty: nonneg,
+            fee_rate_min: nonneg,
+            fee_rate_max: pos,
+            fee_rate_penalty: nonneg,
+            wash_tvl_usd: pos,
+            wash_volume_usd: pos,
+            wash_penalty: nonneg,
           })
           .strict(),
         costs: z

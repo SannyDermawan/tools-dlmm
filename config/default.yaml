@@ -228,16 +228,26 @@ simulation:
                                    # they happen on the first fresh update. Session-end closes still happen.
   avoid_bin_array_init: false      # true: signal modes skip ranges that need a new bin array
   max_bins_per_position: 1400      # POSITION_MAX_LENGTH in lb_clmm 0.12.0 (verify on upgrades)
-  gas_aware_rebalance: true        # rebalance_out_of_range skips the rebalance (closes instead) when its
-                                   # cost >= the pool's expected fee income, same check exit_engine already
-                                   # had (prism-liquidity-agent GAS_AWARE_MIN_DAYS_OF_FEES_PAID_AHEAD)
-  volume_authenticity:             # wash-trading score (prism-liquidity-agent / Mantis), journaled per
-                                   # position (grid_combo.volume_auth_score), not yet a hard filter
-    max_volume_tvl_ratio: 10       # volume / TVL over this -> suspicious
-    fee_rate_min_pct: 0.02         # pool fee rate outside [min,max] -> suspicious
-    fee_rate_max_pct: 2
-    low_tvl_usd: 10000             # below this TVL, a lower volume/TVL ratio is already suspicious ...
-    low_tvl_volume_tvl_ratio: 5    # ... this one
+  gas_aware_rebalance: true        # rebalance_out_of_range closes instead of rebalancing when the rebalance
+                                   # cost >= the pool's expected fee income over gas_aware_horizon_hours
+                                   # (exit_engine already had this check, always over its own edge horizon)
+  gas_aware_horizon_hours: 2       # = scoring.edge.horizon_minutes (120). prism-liquidity-agent asks for
+                                   # 3 days of fees to repay the gas (GAS_AWARE_MIN_DAYS_OF_FEES_PAID_AHEAD);
+                                   # 2 h is 36x stricter. Raise it (e.g. 72) for their semantics, but our fee
+                                   # estimate is a 2 h Monte Carlo, not a 3-day forecast.
+  volume_authenticity:             # wash-trading score: irfndi/prism-liquidity-agent checkVolumeAuthenticity
+                                   # (constants copied from its strategy-service.ts); journaled per position
+                                   # as grid_combo.volume_auth_score, not (yet) a filter
+    suspicious_volume_tvl: 10      # 24 h volume / TVL above this: -suspicious_penalty
+    suspicious_penalty: 0.3
+    elevated_volume_tvl: 5         # above this (and below the suspicious level): -elevated_penalty
+    elevated_penalty: 0.15
+    fee_rate_min: 0.0002           # measured fees / volume outside [min, max] (0.02% .. 2%): -fee_rate_penalty
+    fee_rate_max: 0.02
+    fee_rate_penalty: 0.2
+    wash_tvl_usd: 5000             # TVL below this with 24 h volume above wash_volume_usd: -wash_penalty
+    wash_volume_usd: 100000
+    wash_penalty: 0.5
   costs:
     base_fee_lamports_per_signature: 5000
     signatures: { open: 2, close: 1, rebalance: 2, claim: 1, add: 1, swap: 1 }   # add: add liquidity (fee compounding)

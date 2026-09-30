@@ -1,0 +1,349 @@
+# Strategy registry (roadmap PHASE 1). One entry per strategy, internal or from an outside source.
+# Rules for this file:
+#  - `status: implemented` entries must name a grid entry mode (`entry_mode`) and test/registry.test.ts
+#    checks the list against grid.entry_modes in both directions.
+#  - `source.verified` says how well we know the original: source_code (we read the code), summary_only
+#    (a tweet / image / README-level description, unverified) or internal.
+#  - `fidelity` says how close our implementation is to the original: faithful, interpretation (our own
+#    reading), not_implemented, n/a.
+#  - One repository is not one strategy: see `sources` for forks / siblings, and each entry for what it
+#    really contains. Nothing here is frozen yet (`universe.frozen: false`): freezing Strategy Universe v1
+#    is the owner's decision, not a side effect of writing this file.
+#  - Numbers in `evidence` are simulator results on virtual $1000 positions from 2 live 2 h sessions
+#    (2026-09-29 / 09-30). They show nothing conclusive yet (roadmap: 5 sessions = pipeline check only).
+
+universe:
+  version: v1
+  frozen: false
+  updated: "2026-09-30"
+  note: "Candidates below are listed, not added to the grid. Adding one is a separate step with its own tests."
+
+sources:
+  - id: yunus-0x/meridian
+    url: https://github.com/yunus-0x/meridian
+    kind: live LLM agent (JavaScript)
+    relation: upstream
+    read: "2026-09-30 source code (config.js, strategy-library.js, tools/screening.js, prompt.js, index.js)"
+    notes: "Five default strategies in strategy-library.js: custom_ratio_spot, single_sided_reseed, fee_compounding, multi_layer, partial_harvest. No evil_panda in this repository."
+  - id: fciaf420/meridian
+    url: https://github.com/fciaf420/meridian
+    kind: fork of yunus-0x/meridian (488 commits ahead, 189 behind at reading time)
+    relation: fork of yunus-0x/meridian
+    read: "2026-09-30 source code"
+    notes: "Adds the named policy evil_panda (prompt.js, tools/dlmm.js, config.js), GMGN screening, autoresearch, Telegram UI. Its README lists the Meridian contributors."
+  - id: irfndi/prism-liquidity-agent
+    url: https://github.com/irfndi/prism-liquidity-agent
+    kind: live rule-based agent (TypeScript, Bun), optional agent overlay
+    relation: same lineage as DeltaLogicLabs/Mantis (same README text and risk gates), far larger and maintained
+    read: "2026-09-30 docs/strategy-reference.md, docs/profitability-review-2026-09-05.md, docs/fallen-angel-mode.md and ten engine modules"
+    notes: "Its own production ledger is a loss (393 closes, win rate 46 %, -$190, profit factor 0.31) and its audit blames trade count (churn-guard.ts, pnl-halt.ts)."
+  - id: DeltaLogicLabs/Mantis
+    url: https://github.com/DeltaLogicLabs/Mantis
+    kind: paper-only LLM agent scaffold (TypeScript, v1.0.0 2026-04-02)
+    relation: earlier sibling of Prism
+    read: "2026-09-30 engine/index.ts, engine/probes/dlmm.ts, ops/backtest.ts, ARCHITECTURE.md"
+    notes: "Live trading is not implemented; its backtest runs on random-walk mock data; paper positions never accrue fees. Its filters are the ones Prism later refined."
+  - id: hummingbot/hummingbot
+    url: https://github.com/hummingbot/hummingbot
+    kind: market-making framework (Python), Meteora / Orca / Raydium CLMM through Gateway
+    relation: independent
+    read: "2026-09-30 controllers/generic/lp_rebalancer (README), executors/position_executor/data_types.py"
+    notes: "TripleBarrierConfig belongs to position_executor (directional trading), not to the LP executor."
+
+strategies:
+  # ----------------------------------------------------------------- internal
+  - id: all_pools_baseline
+    name: Every pool, whole grid
+    kind: internal
+    status: implemented
+    entry_mode: all_pools_baseline
+    source: { name: blueprint, url: null, verified: internal }
+    fidelity: n/a
+    rules:
+      entry: "Every pool at every cohort time; no filter (the unbiased reference)."
+      filters: "None. Gap-tainted positions are flagged, not removed."
+      side: "grid: two_sided / quote_only / base_only"
+      range: "grid: bins_per_side and price-% widths (30/50/70/90), Spot / Curve / BidAsk"
+      exits: "grid: hold, out-of-range (0/15 min), rebalance, take profit, stop loss, trailing, tp_sl_combo, low yield, time stop, flow triggers, exit engine"
+      rebalance: "rebalance_out_of_range (gas-aware since 2026-09-30), exit_engine"
+      reentry: "none (one position per grid combination and cohort)"
+    transaction_profile: { churn: medium, notes: "Two to four transactions per position; rebalancing policies add two per flip." }
+    capital_sensitivity:
+      fixed_cost_exposure: medium
+      notes: "Cost is about 98 % swap, token tax and composition (proportional to size) and about 3 % transaction fee and bin-array creation (fixed in dollars)."
+    evidence:
+      - "Sessions 16aea039 and 2041cb2d: average net about -5 % (memecoin -5 %, bluechip -0.3 %); break-even 3.88 % of capital at $1000."
+
+  - id: signal_enter
+    name: Our own signal, enter on MASUK
+    kind: internal
+    status: implemented
+    entry_mode: signal_enter
+    source: { name: blueprint phases 4-7, url: null, verified: internal }
+    fidelity: n/a
+    rules:
+      entry: "Pools whose latest signal is MASUK, at cohort times and (signal_entry.trigger: both) when a pool's signal turns MASUK."
+      filters: "Score modules, rug / audit gates, pool cooldown dimension."
+      side: "grid"
+      range: "grid"
+      exits: "grid"
+      rebalance: "grid"
+      reentry: "min_gap_minutes 15, max_per_pool 6 (event entries)"
+    transaction_profile: { churn: medium, notes: "Same as the baseline on the pools it picks." }
+    capital_sensitivity: { fixed_cost_exposure: medium, notes: "Same as the baseline." }
+    evidence:
+      - "694 positions, -0.1 pp vs baseline, better in 1 of 2 cohorts. Zero positions in the first session: MASUK lasted about a minute and no cohort instant hit one (fixed by event entries)."
+
+  - id: signal_watch
+    name: Our own signal, enter on PANTAU
+    kind: internal
+    status: implemented
+    entry_mode: signal_watch
+    source: { name: blueprint phases 4-7, url: null, verified: internal }
+    fidelity: n/a
+    rules:
+      entry: "Pools whose latest signal is PANTAU (small size in the blueprint; here the same grid)."
+      filters: "As signal_enter."
+      side: "grid"
+      range: "grid"
+      exits: "grid"
+      rebalance: "grid"
+      reentry: "as signal_enter"
+    transaction_profile: { churn: medium, notes: "As the baseline." }
+    capital_sensitivity: { fixed_cost_exposure: medium, notes: "As the baseline." }
+    evidence:
+      - "3316 positions, -0.6 pp vs baseline, better in 2 of 3 cohorts."
+
+  # ----------------------------------------------------------------- external, implemented
+  - id: meridian_preset
+    name: Meridian default screen
+    kind: external
+    status: implemented
+    entry_mode: meridian_preset
+    source:
+      name: Meridian (yunus-0x/meridian, fciaf420 fork)
+      url: https://github.com/yunus-0x/meridian
+      verified: source_code
+    fidelity: interpretation
+    rules:
+      entry: "Top 3 passing pools per cohort ranked by fee/TVL x 1000 + organic x 10 + volume / 100 + holders / 100."
+      filters: "fee / active TVL >= 0.05 (5 m), TVL 10k-150k, volume >= 500, bin step 80-125, mcap 150k-10M, holders >= 500, organic >= 60, top 10 <= 60 %. Optional (off): volatility, price change, token fees SOL (Meridian 30), bin utilization, bundlers."
+      side: "quote only (single-sided SOL)"
+      range: "bid-ask, 69 bins below the price"
+      exits: "tp_sl_combo: stop loss 15 %, take profit 5 % of fees, trailing 3 % / 1.5 %, out of range 30 min"
+      rebalance: "none (exit at out of range)"
+      reentry: "none"
+    original_vs_implemented:
+      - "Stop loss: upstream code default is -50 (stopLossPct falls back to emergencyPriceDropPct), the fork's is -20, its README says -15; we use 15."
+      - "Not reproduced: quote token organic >= 60, SOL-quoted pools only, the discovery API's critical-warnings and high-single-ownership flags, `category: trending` ranking, LLM narrative check, smart wallets, LP Agent top-LPer study."
+      - "Top 10 > 60 % is a hard code skip in Meridian (index.js), bundlers > 30 % only a rule in the LLM prompt, and bot holders have no threshold there; our 30 % is our own."
+      - "Timeframe: Meridian filters on Meteora's pool-discovery API (5 m windows, `volatility`, `price_change_pct`); we compute from bin snapshots and the Data API."
+    transaction_profile: { churn: low, notes: "One open per cohort and pool; exit on out of range / stop / take profit." }
+    capital_sensitivity: { fixed_cost_exposure: low, notes: "Few transactions; TVL 10k-150k keeps price impact of a $40 position negligible." }
+    evidence:
+      - "Session 1: evaluated 75, passed 0 (filters too strict for the 25 pools watched). Session 2: 7 positions, -4.4 pp vs baseline, worse in 3 of 3 cohorts (n too small)."
+
+  - id: friday_scalp
+    name: Friday's manual scalp playbook
+    kind: external
+    status: implemented
+    entry_mode: friday_scalp
+    source:
+      name: "Friday (manual trader), three images shared 2026-09-29"
+      url: null
+      verified: summary_only
+    fidelity: interpretation
+    rules:
+      entry: "Fresh memecoin pools (< 6 h), bin step 100, base fee 1-3 % (Friday: 2 %), TVL >= 1000, no mint / freeze authority; 1-minute flow confirmation (volume rising 2 min, net buy > 0, holders growing, bundlers stable)."
+      filters: "As entry; missing token data skips a check and flags preset_partial."
+      side: "two-sided"
+      range: "Spot, 34 + 1 + 34 bins"
+      exits: "Time stop 15 min, out of range at once, or ONE flow trigger (bundler -2 pp, net buy <= -$5000, holders -10 %, volume -20 %)."
+      rebalance: "none"
+      reentry: "5 minutes after close, at most 6 per pool per session"
+    original_vs_implemented:
+      - "Friday trades by hand; thresholds are his words, each one a configurable level."
+      - "Base fee widened from 2 % to 1-3 % because 2 % pools were rare in live sessions."
+    transaction_profile: { churn: high, notes: "Time stop 15 min plus re-entry every 5 min: up to six round trips per pool per session." }
+    capital_sensitivity:
+      fixed_cost_exposure: high
+      notes: "Many short positions: the fixed transaction and bin-array cost is paid per round trip and a $40 position earns little per round trip."
+    evidence:
+      - "9 positions in 2 sessions, -1.2 pp vs baseline, better in 3 of 5 cohorts. Break-even 5.8 % at $1000 (7 positions, not reliable)."
+
+  - id: yunus_flip
+    name: Quote-only bid-ask, hold, flip above
+    kind: external
+    status: implemented
+    entry_mode: yunus_flip
+    source:
+      name: "Yunus (@0xyunss) / EvilPanda, public tweet summaries"
+      url: null
+      verified: summary_only
+    fidelity: interpretation
+    rules:
+      entry: "Memecoin pool, risk token = base X, TVL >= 10k, no mint / freeze authority; optional mcap / age / ATH-drawdown screens (off)."
+      filters: "As entry."
+      side: "quote only below the price, then base only above it (flip)"
+      range: "bid-ask 50 / 70 % below the price (or below the ATH); flip range +100 % above the new price, plain bid-ask or 70:30 bid-ask : spot"
+      exits: "No stop loss. Cycle ends fully back in quote (cycle_complete), or break-even after being under water, or a 24 h cap."
+      rebalance: "flip when fully converted to the token (up to 2 flips)"
+      reentry: "30 minutes after close, at most 2 cycles per pool"
+    original_vs_implemented:
+      - "Built from summaries, not code. It is NOT Meridian's evil_panda (see that entry): there is no flip in that code."
+      - "The closest public code for the flip is hummingbot's lp_rebalancer (BUY = quote-only below price, SELL = base-only above, re-open on the other side after an auto-close), whose documented default size is $50."
+      - "Meridian's upstream strategy library also has single_sided_reseed (token-only bid-ask, re-open lower without swapping), which our variant single_sided_reseed models."
+    transaction_profile: { churn: low, notes: "A cycle can last hours; transactions are open, flips and close; no balancing swap after the first deposit." }
+    capital_sensitivity:
+      fixed_cost_exposure: low
+      notes: "Break-even 0.12 % at $1000 of which about half is the transaction fee; projected about 1.7 % at $40 (paper estimate, not measured)."
+    evidence:
+      - "382 positions in 2 sessions, +3.4 pp vs baseline, better in 4 of 4 cohorts with entries; but 376 of them opened in the first cohort of each session (188 each), so it is about two samples, and cycles rarely complete within 2 h (censored)."
+
+  # ----------------------------------------------------------------- external, candidates (not in the grid)
+  - id: evil_panda
+    name: Evil Panda (Meridian fork policy)
+    kind: external
+    status: candidate
+    entry_mode: null
+    source:
+      name: fciaf420/meridian prompt.js, tools/dlmm.js, config.js (evilPanda block)
+      url: https://github.com/fciaf420/meridian
+      verified: source_code
+    fidelity: not_implemented
+    rules:
+      entry: "Token 24 h volume >= $750k, market cap >= $200k, 5-minute Supertrend green with price above it (GMGN data); else skip."
+      filters: "Meridian screen; two-sided spot and bid-ask are refused under this policy."
+      side: "quote only (single-sided SOL)"
+      range: "Spot, 80 % below the active bin, bins_above = 0 (at least that range)"
+      exits: "Only while PnL is positive: 5-minute RSI(2) > 90 with the close above the Bollinger upper band or the first green MACD histogram; Meridian's stop loss / trailing / take profit also apply."
+      rebalance: "none specified"
+      reentry: "Meridian's screener cycle (every 30 min)"
+    original_vs_implemented:
+      - "To test it we would need: Supertrend (we have supertrendSeries), RSI(2) (rsiSeries), Bollinger (pctBSeries), MACD (missing), token 24 h volume (token_audit.volume_24h_usd) instead of GMGN's."
+      - "The author's own claim in the prompt (spot without a SOL split -10.75 %, with split +7.48 % at 73 % wins) is from his lessons file, unverified."
+    transaction_profile: { churn: low, notes: "One position at a time per pool; exit only on the indicator confluence while in profit." }
+    capital_sensitivity: { fixed_cost_exposure: low, notes: "Few transactions; an 80 % wide single-sided range needs about 160 bins at bin step 100 -> several transactions." }
+    evidence: []
+
+  - id: hummingbot_lp_rebalancer
+    name: Hummingbot LP rebalancer (BUY / SELL zones)
+    kind: external
+    status: reference
+    entry_mode: null
+    source:
+      name: hummingbot/hummingbot controllers/generic/lp_rebalancer
+      url: https://github.com/hummingbot/hummingbot/tree/master/controllers/generic/lp_rebalancer
+      verified: source_code
+    fidelity: not_implemented
+    rules:
+      entry: "One position at a time; initial side BUY (quote-only), SELL (base-only) or RANGE; bounds from position_width_pct and position_offset_pct (positive offset = starts out of range)."
+      filters: "None (pool chosen by the operator); optional buy / sell price zones."
+      side: "BUY below price, SELL above, RANGE 50/50"
+      range: "position_width_pct of the price (default 0.5 %), anchored at the zone limits"
+      exits: "Executor auto-closes when the price passes the range by rebalance_threshold_pct (default 1 %)."
+      rebalance: "After the close: price >= upper -> BUY with the quote received, price < lower -> SELL with the base received; autoswap if short."
+      reentry: "Immediate, inside the price zones; otherwise wait for the price to enter them."
+    original_vs_implemented:
+      - "yunus_flip is the same idea with bin-based bid-ask ranges and no price zones; the reference shows the loop that we only approximate."
+    transaction_profile: { churn: high, notes: "A close and an open each time the price passes the threshold (0.5 % wide ranges re-center often)." }
+    capital_sensitivity: { fixed_cost_exposure: high, notes: "Narrow ranges churn; the documented default position is $50 (quote)." }
+    evidence: []
+
+  - id: prism_fallen_angel
+    name: Prism fallen-angel mode (mean reversion)
+    kind: external
+    status: candidate
+    entry_mode: null
+    source:
+      name: irfndi/prism-liquidity-agent docs/fallen-angel-mode.md
+      url: https://github.com/irfndi/prism-liquidity-agent
+      verified: source_code
+    fidelity: not_implemented
+    rules:
+      entry: "Token far below its all-time high (GeckoTerminal daily candles), daily-return volatility inside a band, clean RugCheck report (no critical risks, authorities, holder concentration, min holders, score floor); any TVL."
+      filters: "As entry; never relaxes blacklist / freeze gates."
+      side: "as the agent's shape choice (spot / curve / bidask)"
+      range: "agent's volatility-adaptive width"
+      exits: "Take-profit ladder (e.g. +15 / +30 / +50 % with 40 / 30 / 30 % fractions, by close and re-open) and an invalidation stop (e.g. 25 %)."
+      rebalance: "per agent rules"
+      reentry: "next cycle for the remainder of a ladder"
+    original_vs_implemented:
+      - "We already journal ath_drawdown_pct and slice the report by it; a first look needs no new code. Daily volatility band and RugCheck are not collected."
+    transaction_profile: { churn: medium, notes: "Close-and-reopen ladder adds transactions per rung." }
+    capital_sensitivity: { fixed_cost_exposure: medium, notes: "Three rungs mean three round trips; poor for a $40 position." }
+    evidence: []
+
+  - id: prism_runner_launch
+    name: Prism market runner / launch posture
+    kind: external
+    status: candidate
+    entry_mode: null
+    source:
+      name: irfndi/prism-liquidity-agent docs/strategy-reference.md, engine/launch-gate.ts, market-runner.ts
+      url: https://github.com/irfndi/prism-liquidity-agent
+      verified: source_code
+    fidelity: not_implemented
+    rules:
+      entry: "Young hot pools: measured fee APR >= 500 % confirmed over 2 observations, net active-bin drift above -8 bins, 24 h volume / TVL inside 0.02-50x, base fee and bin-step bands."
+      filters: "Launch gate fails closed on missing data; wash forensics on distinct fee payers."
+      side: "dip-anchored band below the market"
+      range: "time-boxed, below-market band with scale-in"
+      exits: "0.25 drawdown stop, time box, decay; rotation out when a challenger's net APR is 5x the worst held."
+      rebalance: "rotation"
+      reentry: "cooldowns (OOR 4 h, repeat 12 h) and a per-pool daily re-entry cap"
+    original_vs_implemented:
+      - "Overlaps friday_scalp (fresh lane). Its own audit (churn-guard.ts): two churned pools lost $228 over 346 round trips, and a passive hold of the first pool's own snapshots would have gained $17."
+    transaction_profile: { churn: high, notes: "Built for hundreds of round trips a day; the project's own ledger says that loses at its account size." }
+    capital_sensitivity: { fixed_cost_exposure: high, notes: "A small account cannot amortize a round trip (their audit)." }
+    evidence: []
+
+  - id: meridian_strategy_library
+    name: Upstream Meridian strategy library
+    kind: external
+    status: reference
+    entry_mode: null
+    source:
+      name: yunus-0x/meridian strategy-library.js
+      url: https://github.com/yunus-0x/meridian/blob/main/strategy-library.js
+      verified: source_code
+    fidelity: interpretation
+    rules:
+      entry: "custom_ratio_spot (directional ratio), single_sided_reseed, fee_compounding, multi_layer, partial_harvest."
+      filters: "Screening as meridian_preset."
+      side: "per strategy"
+      range: "per strategy"
+      exits: "per strategy (e.g. partial_harvest: withdraw 50 % at +10 % return; fee_compounding: add back fees > $5 while in range)"
+      rebalance: "single_sided_reseed: close without swapping and re-open token-only lower"
+      reentry: "per strategy"
+    original_vs_implemented:
+      - "Our grid variants partial_harvest, fee_compounding and single_sided_reseed come from this list (same thresholds: +10 % / 50 %, $5, re-seed). multi_layer and custom_ratio_spot are not modelled."
+    transaction_profile: { churn: medium, notes: "Variants add transactions (compounding every 30 min, harvests, re-seeds)." }
+    capital_sensitivity: { fixed_cost_exposure: medium, notes: "Compounding at $5 never triggers for a $40 position; harmless but useless." }
+    evidence: []
+
+  # ----------------------------------------------------------------- excluded
+  - id: llm_decision_agents
+    name: LLM agents that decide entries and exits (Meridian loop, Mantis)
+    kind: external
+    status: excluded
+    entry_mode: null
+    source:
+      name: fciaf420/meridian, yunus-0x/meridian, DeltaLogicLabs/Mantis
+      url: https://github.com/DeltaLogicLabs/Mantis
+      verified: source_code
+    fidelity: n/a
+    rules:
+      entry: "A language model picks deploy / hold / close each cycle from tool results."
+      filters: "Mixed code gates and prompt rules (Meridian: hard skips in code, narrative and bundler rules in the prompt)."
+      side: "model's choice"
+      range: "model's choice within code limits"
+      exits: "model's choice plus code stops"
+      rebalance: "model's choice"
+      reentry: "model's choice"
+    original_vs_implemented:
+      - "Excluded by rule: the LLM never decides entries, exits or sizes here. Their deterministic parts (filters, hard skips, risk gates) are what we take."
+      - "Mantis has no live trading and a random-walk backtest; it adds no strategy beyond filters Prism later refined."
+    transaction_profile: { churn: medium, notes: "Not measurable: the decision rule is not reproducible." }
+    capital_sensitivity: { fixed_cost_exposure: medium, notes: "n/a" }
+    evidence: []
