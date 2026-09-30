@@ -228,6 +228,16 @@ simulation:
                                    # they happen on the first fresh update. Session-end closes still happen.
   avoid_bin_array_init: false      # true: signal modes skip ranges that need a new bin array
   max_bins_per_position: 1400      # POSITION_MAX_LENGTH in lb_clmm 0.12.0 (verify on upgrades)
+  gas_aware_rebalance: true        # rebalance_out_of_range skips the rebalance (closes instead) when its
+                                   # cost >= the pool's expected fee income, same check exit_engine already
+                                   # had (prism-liquidity-agent GAS_AWARE_MIN_DAYS_OF_FEES_PAID_AHEAD)
+  volume_authenticity:             # wash-trading score (prism-liquidity-agent / Mantis), journaled per
+                                   # position (grid_combo.volume_auth_score), not yet a hard filter
+    max_volume_tvl_ratio: 10       # volume / TVL over this -> suspicious
+    fee_rate_min_pct: 0.02         # pool fee rate outside [min,max] -> suspicious
+    fee_rate_max_pct: 2
+    low_tvl_usd: 10000             # below this TVL, a lower volume/TVL ratio is already suspicious ...
+    low_tvl_volume_tvl_ratio: 5    # ... this one
   costs:
     base_fee_lamports_per_signature: 5000
     signatures: { open: 2, close: 1, rebalance: 2, claim: 1, add: 1, swap: 1 }   # add: add liquidity (fee compounding)

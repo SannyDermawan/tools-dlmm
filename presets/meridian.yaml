@@ -10,14 +10,25 @@ pool_filter:
   min_volume_usd: 500              # over fee_window
   min_bin_step: 80
   max_bin_step: 125
+  max_volatility: null             # null = off. Meridian's config.js `maxVolatility: 8`; unit unverified,
+                                    # so not copied as a number. Ours (below) is stddev of log returns, %.
+  max_price_change_pct: null       # null = off. config.js `maxPriceChangePct: 300` (over fee_window)
+  min_token_fees_sol: null         # null = off. config.js `minTokenFeesSol: 30` (all-time gas paid by the
+                                    # token's traders, datapi; low -> bundled/spam). Now reproducible
+                                    # (token_audit.fees_sol) but left off until its distribution is checked.
+  min_bin_utilization: null        # null = off. Mantis MIN_BIN_UTILIZATION 0.30 (share of bins in
+                                    # [lower,upper] with supply > 0; low -> liquidity clumped)
 token_filter:
   min_organic: 60                  # Jupiter organic score (phase 10); missing -> preset_parsial
   min_holders: 500
   min_mcap_usd: 150000
   max_mcap_usd: 10000000
+  # max_top10_pct / max_bot_holders_pct below are NOT in upstream's base (Meteora) screening path as
+  # of 2026-09-30 -- only its optional GMGN path has an equivalent (maxTop10HolderRate 0.5,
+  # maxBotDegenRate 0.4, different numbers). Ours may be from an earlier doc version; kept as is
+  # since they are our own screening levels to test, not a claim of matching upstream exactly.
   max_top10_pct: 60
   max_bot_holders_pct: 30          # Jupiter audit (phase 10); missing -> preset_parsial
-  # minTokenFeesSol 30 (all-time fees in SOL) is not reproducible from our data: ignored.
 strategy:
   shape: bidask
   sides: quote_only                # one-sided SOL/quote below the price

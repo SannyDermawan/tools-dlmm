@@ -192,6 +192,67 @@ describe("grid runner with signals", () => {
     // hold positions are untouched
     expect(s.list().filter((p) => p.spec.exitPolicy?.type === "hold_to_session_end").every((p) => p.status === "active")).toBe(true);
   });
+
+  it("rebalance_out_of_range gets the same gas-aware gate (prism-liquidity-agent), gated by simulation.gas_aware_rebalance", () => {
+    const c = cfg();
+    c.grid.strategies = ["spot"];
+    c.grid.bins_per_side = [2];
+    c.grid.range_pct = [];
+    c.grid.sides = ["two_sided"];
+    c.grid.exit_policies = [{ type: "rebalance_out_of_range", minutes: 1, max_rebalances: 2 }];
+    c.grid.variants = ["none"];
+    c.grid.sampling.mode = "full";
+    c.grid.entry_modes = ["all_pools_baseline"];
+    const s = new PoolSimulator({ ...META, pool: "A" }, c, new MemorySink(), () => `A-${Math.random()}`);
+    s.onMarket({ quoteUsd: 1, solUsd: 100, priorityMicroLamports: 0 });
+    s.onState(state(0, 0, "A"));
+    s.onBins(snapshot(0, 0, "A"));
+    let expectedFee: number | null = 1000; // huge: rebalancing is worth it at first
+    const runner = new GridRunner(c, new Map([["A", s]]), new SessionClock(0, { durationMinutes: 60, warmupMinutes: 1, stopNewBeforeEndMinutes: 10, cohortIntervalMinutes: 0 }), undefined, {
+      book: new SignalBook(null, c, "S", "v"), expectedFeeUsd: () => expectedFee,
+    });
+    runner.onTick(60_000);
+    s.onState(state(63_000, 0, "A")); // entry_delay_seconds: 3 -- opens in range at the request price
+    const oor = s.list().filter((p) => p.spec.exitPolicy?.type === "rebalance_out_of_range");
+    expect(oor.length).toBeGreaterThan(0);
+    expectedFee = 0; // now not worth it
+    s.onState(state(70_000, 30, "A")); // out of range
+    runner.onPoolState("A", 70_000);
+    s.onState(state(131_000, 30, "A")); // > 1 min out of range
+    runner.onPoolState("A", 131_000);
+    expect(oor.every((p) => p.status === "closed" && p.closeReason === "rebalance_out_of_range:rebalance_not_worth")).toBe(true);
+    expect(runner.stats.rebalanceNotWorth).toBe(oor.length);
+  });
+
+  it("the gas-aware gate is off when simulation.gas_aware_rebalance is false: it rebalances anyway", () => {
+    const c = cfg();
+    c.simulation.gas_aware_rebalance = false;
+    c.grid.strategies = ["spot"];
+    c.grid.bins_per_side = [2];
+    c.grid.range_pct = [];
+    c.grid.sides = ["two_sided"];
+    c.grid.exit_policies = [{ type: "rebalance_out_of_range", minutes: 1, max_rebalances: 2 }];
+    c.grid.variants = ["none"];
+    c.grid.sampling.mode = "full";
+    c.grid.entry_modes = ["all_pools_baseline"];
+    const s = new PoolSimulator({ ...META, pool: "A" }, c, new MemorySink(), () => `A-${Math.random()}`);
+    s.onMarket({ quoteUsd: 1, solUsd: 100, priorityMicroLamports: 0 });
+    s.onState(state(0, 0, "A"));
+    s.onBins(snapshot(0, 0, "A"));
+    const runner = new GridRunner(c, new Map([["A", s]]), new SessionClock(0, { durationMinutes: 60, warmupMinutes: 1, stopNewBeforeEndMinutes: 10, cohortIntervalMinutes: 0 }), undefined, {
+      book: new SignalBook(null, c, "S", "v"), expectedFeeUsd: () => 0, // would fail the gate if it were checked
+    });
+    runner.onTick(60_000);
+    s.onState(state(63_000, 0, "A")); // entry_delay_seconds: 3 -- opens in range at the request price
+    const oor = s.list().filter((p) => p.spec.exitPolicy?.type === "rebalance_out_of_range");
+    s.onState(state(70_000, 30, "A"));
+    runner.onPoolState("A", 70_000);
+    s.onState(state(131_000, 30, "A"));
+    runner.onPoolState("A", 131_000);
+    expect(oor.every((p) => p.status === "active")).toBe(true);
+    expect(runner.stats.rebalanceNotWorth).toBe(0);
+    expect(runner.stats.rebalances).toBe(oor.length);
+  });
 });
 
 import { PoolTracker } from "../src/features/tracker.ts";

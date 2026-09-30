@@ -731,6 +731,49 @@ Session `16aea039` (2 h, config `session-2h.yaml`): 6161 positions, 0 gap-tainte
 - Data needed: about 5 two-hour sessions on different days / hours for the market cap and top-10 buckets (the unit is the pool, not the position: one pool can be 190 positions), about 20 detected rugs for the screens in `dlmm rugs`. Smart-LP presence is journaled from now on, so sessions before this change cannot be used for it.
 - Next (needs more sessions first): smart-LP presence as an entry filter, cluster / funding analysis of holders (only with a stable public source), combined entry mode.
 
+## Cross-checked against 5 external DLMM/LP-agent projects (2026-09-30) ✅
+
+Studied `fciaf420/meridian` (fork of `yunus-0x/meridian`, live LLM-driven agent), `irfndi/prism-liquidity-agent`
+(rule-based live agent, LLM optional as a confidence-lowering overlay only), `DeltaLogicLabs/Mantis` (near-sibling
+of Prism, but Claude decides every cycle), and `hummingbot/hummingbot` (general market-making framework, has a
+Meteora CLMM connector). None run an LLM as anything more than an optional veto/overlay in the non-Meridian/Mantis
+projects; Meridian and Mantis let an LLM decide entries/exits live, which we do not adopt (our own rule: LLM never
+decides entry/exit/size). Six concrete, data-ready ideas implemented:
+
+- **Volume authenticity score** (`src/features/poolQuality.ts:volumeAuthenticity`, prism-liquidity-agent /
+  Mantis): 0–1 score from volume/TVL ratio, pool fee-rate band, and volume on thin TVL. Journaled per position
+  (`grid_combo.volume_auth_score`, config `simulation.volume_authenticity`), not yet a hard filter.
+- **Gas-aware rebalance gate** extended from `exit_engine` to `rebalance_out_of_range` (prism-liquidity-agent's
+  gas-aware rebalance): skip the rebalance (close instead) when its cost >= the pool's expected fee income.
+  New close reason `rebalance_out_of_range:rebalance_not_worth`, flag `simulation.gas_aware_rebalance` (default
+  on). Directly relevant to the $40 capital question: this is exactly the kind of fixed-cost-vs-income check
+  that protects a small position from repeated rebalance churn.
+- **`min_token_fees_sol`** added to the Meridian preset (config.js `minTokenFeesSol`: all-time gas a token's
+  traders have paid; low -> bundled/spam suspicion). Reproducible from `token_audit.fees_sol`, which we already
+  collect; wired through `AuditRow` -> `presetInputsOf` -> `evaluateMeridian`. Off (null) by default.
+- **Bin-utilization filter** (`min_bin_utilization`, Mantis `MIN_BIN_UTILIZATION`): share of bins in
+  `[lower, upper]` with non-zero supply at the latest snapshot; low means liquidity clumped into a narrow band,
+  which breaks the uniform-distribution assumption a Spot/wide-range IL model relies on. Journaled on every
+  position too (`grid_combo.bin_utilization`). Off by default.
+- **`max_volatility` / `max_price_change_pct`** added to the Meridian preset (config.js has both; ours was
+  missing them). Ours is our own proxy (stddev of log returns over the fee window, %), not a byte-for-byte port
+  of Meridian's internal volatility feature (units undocumented). Off by default.
+- **IL formula cross-checked against Mantis's closed-form CPMM approximation**
+  (`r=(1+binStep/10000)^binsDrifted; IL=2√r/(1+r)-1`): no change needed. Ours is computed directly as
+  `valueUsd - hodlUsd` from the actual simulated bin composition and price path, which is exact for our shapes
+  (spot/curve/bidask) rather than an approximation assuming a single global CPMM curve; the closed form is only
+  a fast real-time estimate for a project that doesn't simulate bin composition.
+
+Also corrected, not changed: `presets/meridian.yaml`'s `max_top10_pct` (60) / `max_bot_holders_pct` (30) do not
+match the fork's current base (Meteora) screening path, which has no top10/bot-holder check at all — only its
+optional GMGN path does, at 50% / 40%. Left as is (documented in the preset's comments): these are our own
+screening levels to test, not a claim of matching upstream exactly, and changing them is a judgement call, not
+a bug fix.
+
+New report dimensions (session report + `analyze`): volume authenticity score, bin utilization, realized
+volatility, all bucketed like the other entry-context fields. 346/346 tests pass (`test/poolQuality.test.ts` new,
+`test/phase5.test.ts` and `test/phase9.test.ts` extended).
+
 ## RPC: Helius Free + swap stream redesign (2026-09-29)
 - `.env` points to Helius (Free: 1M credits/month, 10 rps). Rate limits: critical 3 rps +
   swap stream 5 rps + token security 0.75 rps.

@@ -235,7 +235,10 @@ export interface GridSignals {
   smartLp?: (pool: string, t: number) => { smart: number; openPositions: number } | null;
   tokenInfo?: (pool: string, t: number) => { tokenAgeHours: number | null; mcapUsd: number | null; /** the risk token is the base token X */ riskIsBase?: boolean;
     /** token context at entry, journaled with every position (null = unknown) */
-    top10Pct?: number | null; holders?: number | null; organic?: number | null; botHoldersPct?: number | null; bundlerPct?: number | null } | null;
+    top10Pct?: number | null; holders?: number | null; organic?: number | null; botHoldersPct?: number | null; bundlerPct?: number | null;
+    /** pool-quality context at entry (5-minute window; see src/features/poolQuality.ts) */
+    volatilityPct?: number | null; priceChangePct?: number | null; binUtilization?: number | null; tokenFeesSol?: number | null;
+    volumeAuthScore?: number | null } | null;
   /** highest price (pool quote units) seen up to t, only for pools whose risk token is the base (ath_drawdown_pct) */
   ath?: (pool: string, t: number) => number | null;
   /** one-minute flow of a pool at t (flow exits, Friday entry confirmation) */
@@ -463,6 +466,11 @@ export class GridRunner {
       bundler_pct: ti?.bundlerPct != null ? round(ti.bundlerPct, 1) : null,
       smart_lp_open: lp ? lp.smart : null,
       lp_positions_open: lp ? lp.openPositions : null,
+      volatility_pct: ti?.volatilityPct != null ? round(ti.volatilityPct, 3) : null,
+      price_change_pct: ti?.priceChangePct != null ? round(ti.priceChangePct, 2) : null,
+      bin_utilization: ti?.binUtilization != null ? round(ti.binUtilization, 3) : null,
+      token_fees_sol: ti?.tokenFeesSol != null ? round(ti.tokenFeesSol, 2) : null,
+      volume_auth_score: ti?.volumeAuthScore != null ? round(ti.volumeAuthScore, 2) : null,
     };
     return sim.request({ ...spec, combo }, ts);
   }
@@ -787,14 +795,19 @@ export class GridRunner {
         this.stats.policyExits++;
         continue;
       }
-      if (pol.type === "exit_engine" && this.c.exit_engine.rebalance_cost_check && this.signals?.expectedFeeUsd) {
-        // blueprint 15: do not rebalance when it costs more than the fee it is expected to earn
+      // blueprint 15 (exit_engine) / prism-liquidity-agent's gas-aware rebalance (rebalance_out_of_range):
+      // do not rebalance when it costs more than the fee it is expected to earn -- a fixed-dollar tx +
+      // rent cost paid again for every out-of-range flip is exactly what makes small capital worse off.
+      const costCheckOn =
+        (pol.type === "exit_engine" && this.c.exit_engine.rebalance_cost_check) ||
+        (pol.type === "rebalance_out_of_range" && this.c.simulation.gas_aware_rebalance);
+      if (costCheckOn && this.signals?.expectedFeeUsd) {
         const cost = sim.estimateRebalanceCostUsd(p.id);
         const value = sim.valuation(p).valueUsd;
         const fee = this.signals.expectedFeeUsd(pool, value, ts);
         if (cost !== null && fee !== null && cost >= fee) {
           sim.logExitSignal(p.id, ts, { action: "KELUAR", reason: "rebalance_not_worth", conditions: { costUsd: cost, expectedFeeUsd: fee } });
-          sim.close(p.id, "exit_engine:rebalance_not_worth", ts);
+          sim.close(p.id, `${pol.type}:rebalance_not_worth`, ts);
           this.stats.rebalanceNotWorth++;
           continue;
         }

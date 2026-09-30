@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { ScalarExitPolicy } from "./policies.ts";
 
 const num = z.number();
+const optNum = z.number().min(0).nullable();
 const presetSchema = z
   .object({
     pool_filter: z
@@ -16,6 +17,15 @@ const presetSchema = z
         min_volume_usd: num,
         min_bin_step: num,
         max_bin_step: num,
+        // Upstream Meridian (fciaf420/meridian, read 2026-09-30) also screens these; ours were
+        // missing them. null = off (older presets keep working without setting them).
+        max_volatility: optNum,       // config.js `maxVolatility` (unit: their volatility feature,
+                                       // not necessarily ours -- see volatilityPct() below)
+        max_price_change_pct: optNum, // config.js `maxPriceChangePct` over `fee_window`
+        min_token_fees_sol: optNum,   // config.js `minTokenFeesSol`: total gas the token's traders have
+                                       // paid, all-time (datapi `fees_sol`); low -> bundled/spam suspicion
+        min_bin_utilization: optNum,  // share of bins in [lower,upper] with supply > 0 (Mantis
+                                       // MIN_BIN_UTILIZATION); low -> liquidity clumped, IL model breaks
       })
       .strict(),
     token_filter: z
@@ -82,6 +92,15 @@ export interface PresetInputs {
   botHoldersPct: number | null; // Jupiter audit (phase 10)
   /** true for pools whose risk side is a bluechip / stable: token filters do not apply */
   bluechip: boolean;
+  /** realized price volatility over the fee window (stddev of log returns, %; our own proxy --
+   *  not a port of Meridian's internal `maxVolatility`, whose exact units are undocumented) */
+  volatilityPct: number | null;
+  /** |price change| over the fee window, % */
+  priceChangePct: number | null;
+  /** total gas the token's traders have paid, all-time (datapi, SOL; unverified unit) */
+  tokenFeesSol: number | null;
+  /** share of bins in [lower, upper] with supply > 0 at the latest snapshot */
+  binUtilization: number | null;
 }
 
 export interface PresetEvaluation {
@@ -115,6 +134,11 @@ export function evaluateMeridian(p: MeridianPreset, x: PresetInputs): PresetEval
   need("tvl", x.tvlUsd, (v) => v >= pf.min_tvl_usd && v <= pf.max_tvl_usd);
   need("volume", x.volumeUsd, (v) => v >= pf.min_volume_usd);
   need("bin_step", x.binStep, (v) => v >= pf.min_bin_step && v <= pf.max_bin_step);
+  // Optional pool-quality filters (null = off; presets before 2026-09-30 keep working unchanged).
+  if (pf.max_volatility !== null) need("volatility", x.volatilityPct, (v) => v <= pf.max_volatility!);
+  if (pf.max_price_change_pct !== null) need("price_change", x.priceChangePct, (v) => Math.abs(v) <= pf.max_price_change_pct!);
+  if (pf.min_token_fees_sol !== null) need("token_fees_sol", x.tokenFeesSol, (v) => v >= pf.min_token_fees_sol!);
+  if (pf.min_bin_utilization !== null) need("bin_utilization", x.binUtilization, (v) => v >= pf.min_bin_utilization!);
   tok("organic", x.organic, (v) => v >= tf.min_organic);
   tok("holders", x.holders, (v) => v >= tf.min_holders);
   tok("mcap", x.mcapUsd, (v) => v >= tf.min_mcap_usd && v <= tf.max_mcap_usd);

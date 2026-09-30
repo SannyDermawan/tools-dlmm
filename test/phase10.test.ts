@@ -46,7 +46,7 @@ const snapshot = (ts: number, activeId: number, pool = "POOL", scale = 1): BinSn
 };
 const audit = (o: Partial<AuditRow> = {}): AuditRow => ({
   token: "TOKEN1", ts: 0, symbol: "TKN", organic_score: 80, holder_count: 5000, mcap_usd: 1e6, launchpad: null, dev: "DEV1",
-  token_created_at: null, first_pool_at: null, top_holders_pct: 20, dev_balance_pct: 2, bot_holders_pct: 5, is_sus: 0, pvp_rival_count: 0, ...o,
+  token_created_at: null, first_pool_at: null, top_holders_pct: 20, dev_balance_pct: 2, bot_holders_pct: 5, fees_sol: null, is_sus: 0, pvp_rival_count: 0, ...o,
 });
 const newDb = () => {
   const db = new Db(":memory:");
