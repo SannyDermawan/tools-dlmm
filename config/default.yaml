@@ -459,7 +459,8 @@ rug_detection:                   # auto blocklist (phase 10)
   price_drop_pct: 50             # price falls >= 50% within the window ...
   window_minutes: 15
   lp_withdrawal_pct: 50          # ... together with >= 50% of the liquidity near the price withdrawn
-  dev_dump_pct: 50               # ... or the dev balance falling by >= 50% (Jupiter audit)
+  dev_dump_pct: 50               # ... or the dev balance falling by >= 50% (Jupiter audit) ...
+  dev_dump_min_price_drop_pct: 5 # ... and the price falling >= 5% in the window too (a tokenized stock's issuer wallet moves supply without a dump)
 
 # ---------------------------------------------------------------- Phase 4: features & scoring
 # Every number below is a starting hypothesis (blueprint 8-10) to be calibrated from the journal.

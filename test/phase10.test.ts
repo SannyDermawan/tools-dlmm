@@ -319,8 +319,15 @@ describe("automatic rug detection (addendum 3.2)", () => {
     expect(detectRug(trackerWith(true, false), "T-P", t, c(), { now: null, before: null })).toBeNull();
     expect(detectRug(trackerWith(false, false), "T-P", t, c(), { now: null, before: null })).toBeNull();
   });
+  it("a dev balance drop without a price drop is not a rug (issuer wallet of a tokenized stock)", () => {
+    const t = 15 * MIN;
+    const a = { now: audit({ ts: 14 * MIN, dev_balance_pct: 0.4 }), before: audit({ ts: 0, dev_balance_pct: 10 }) };
+    expect(detectRug(trackerWith(false, false), "T-P", t, c(), a)).toBeNull();
+    // price and LPs: a crash with liquidity staying still counts when the dev dumped
+    expect(detectRug(trackerWith(true, false), "T-P", t, c(), a)?.rule).toBe("dev_dump");
+  });
   it("dev dump -> rug; detector blocklists token and dev at t once", () => {
-    const tr = trackerWith(false, false);
+    const tr = trackerWith(true, false);
     const ev = detectRug(tr, "T-P", 15 * MIN, c(), { now: audit({ ts: 14 * MIN, dev_balance_pct: 1 }), before: audit({ ts: 0, dev_balance_pct: 10 }) });
     expect(ev?.rule).toBe("dev_dump");
     const db = newDb();

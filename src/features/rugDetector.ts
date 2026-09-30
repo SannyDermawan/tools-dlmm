@@ -20,7 +20,9 @@ export interface RugEvidence {
  *  - the price falls >= price_drop_pct from the window high AND the liquidity within active +- k
  *    falls >= lp_withdrawal_pct (both, so a plain crash with LPs staying is not a rug), or
  *  - the dev wallet's balance (Jupiter audit, % of supply) falls >= dev_dump_pct relative to the
- *    audit before the window.
+ *    audit before the window AND the price fell >= dev_dump_min_price_drop_pct in the window
+ *    (an issuer wallet of a tokenized stock, e.g. NVDAx, moves supply when minting / redeeming
+ *    without any dump: dev balance -95%, price -0.2%, LPs unchanged, was flagged before).
  * The token (and its dev, when known) is blocklisted with added_at = t, so decisions before t
  * are unchanged (replays stay reproducible). Only data with ts <= t is read.
  */
@@ -59,7 +61,7 @@ export function detectRug(
   if (a0 !== null && a1 !== null && a0 > 0.5 && audit.before!.ts < audit.now!.ts) devDumpPct = Math.max(0, (1 - a1 / a0) * 100);
   const base = { pool: tr.meta.pool, token, dev: audit.now?.dev ?? audit.before?.dev ?? null, t, priceDropPct, lpWithdrawalPct, devDumpPct };
   if (priceDropPct !== null && lpWithdrawalPct !== null && priceDropPct >= c.price_drop_pct && lpWithdrawalPct >= c.lp_withdrawal_pct) return { ...base, rule: "price_and_lp" };
-  if (devDumpPct !== null && devDumpPct >= c.dev_dump_pct) return { ...base, rule: "dev_dump" };
+  if (devDumpPct !== null && devDumpPct >= c.dev_dump_pct && priceDropPct !== null && priceDropPct >= c.dev_dump_min_price_drop_pct) return { ...base, rule: "dev_dump" };
   return null;
 }
 

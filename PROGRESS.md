@@ -835,6 +835,21 @@ smoke session on a separate database polled it 4 times without error and journal
   wallet accumulation, trending rank.
 380 tests pass (`test/poolDiscovery.test.ts` new, registry / phase 9 / phase 0 updated).
 
+## Sessions 3 and 4 of the new design, rug detector fix (2026-10-01) ✅
+
+Session `8691ab49` (9933 positions) and `8fced048` (15164, 0 gap-tainted, realism -0.35 pp after costs). In `8fced048` the
+signal modes lost 2-3 pp against the baseline, but almost all of their positions sat in four "SI" pools; without them
+signal_watch was -0.25%. The pools hold **three different tokens that share the symbol SI** (mints `DEW9dSN6`, `9aqmJjCn`,
+`3VPoXaRc`, plus the rugged `9rJsqPD1` and the earlier `7Wh6rxVW`), so the reports' `pool_name` merges unrelated tokens.
+The blocklist worked as designed: only mint `9rJsqPD1` rugged (its pool had 289 positions, -10%); the other SI tokens
+bled 13-20% over the two hours without tripping the rug rule. So the loss is a downtrend seen by ~4 pools x many grid
+combos, not a blocklist failure. Only ~2 independent market days so far.
+
+**Rug detector: `dev_dump` now needs a price drop too** (`rug_detection.dev_dump_min_price_drop_pct`, default 5). NVDAx
+(a tokenized stock, market cap $73M) was blocklisted as a rug because its issuer wallet's balance moved -95% while the
+price moved -0.2% and LPs stayed. Its blocklist entries (token `Xsc9qvGR...`, dev `S7vYFFWH...`) were soft-removed; the
+session `8691ab49` vetoed its signals because of that entry. 381 tests pass.
+
 ## RPC: Helius Free + swap stream redesign (2026-09-29)
 - `.env` points to Helius (Free: 1M credits/month, 10 rps). Rate limits: critical 3 rps +
   swap stream 5 rps + token security 0.75 rps.

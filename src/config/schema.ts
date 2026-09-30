@@ -623,6 +623,7 @@ export const ConfigSchema = z
         window_minutes: pos,
         lp_withdrawal_pct: pct,
         dev_dump_pct: pct,
+        dev_dump_min_price_drop_pct: pct,
       })
       .strict(),
     scoring: ScoringSchema,
