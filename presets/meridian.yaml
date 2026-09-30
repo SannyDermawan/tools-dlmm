@@ -10,14 +10,29 @@ pool_filter:
   min_volume_usd: 500              # over fee_window
   min_bin_step: 80
   max_bin_step: 125
+  max_volatility: null             # null = off. config.js `maxVolatility: 8` is the `volatility` field of Meteora's
+                                    # pool-discovery API (timeframe 5m; ~0 for a parked pool, ~4 for a moving one).
+                                    # We do not collect that API yet; our own figure (stddev of 1-minute log returns,
+                                    # %) is on another scale, so no Meridian number is copied.
+  max_price_change_pct: null       # null = off. config.js `maxPriceChangePct: 300` (pool price change over the timeframe)
+  min_token_fees_sol: null         # null = off. config.js `minTokenFeesSol: 30`: total priority / jito fees ALL traders of
+                                    # the token paid (not LP fees) = datapi `fees`, our token_audit.fees_sol (SOL). Meridian
+                                    # hard-skips below 30 (index.js hardSkipReason). In our data the smallest of 353 audits
+                                    # is 28 SOL, so on the current pools it would almost never fire.
+  min_bin_utilization: null        # null = off. Prism / Mantis MIN_BIN_UTILIZATION 0.30 (share of bins in [lower, upper]
+                                    # with supply > 0; low -> liquidity clumped)
 token_filter:
   min_organic: 60                  # Jupiter organic score (phase 10); missing -> preset_parsial
   min_holders: 500
   min_mcap_usd: 150000
   max_mcap_usd: 10000000
+  # Meridian (fciaf420 fork, tools/screening.js + index.js, read 2026-09-30): top 10 real holders > 60 % is a hard
+  # skip in code (index.js hardSkipReason; "real" = pools and exchanges excluded), so max_top10_pct matches.
+  # Bot holders have no threshold in Meridian (its GMGN path has maxBotDegenRate 0.4); our 30 is our own level.
+  # Bundlers > 30 % is a rule in its screener PROMPT (the LLM applies it), so it is off here unless set.
   max_top10_pct: 60
   max_bot_holders_pct: 30          # Jupiter audit (phase 10); missing -> preset_parsial
-  # minTokenFeesSol 30 (all-time fees in SOL) is not reproducible from our data: ignored.
+  max_bundlers_pct: null           # null = off; Meridian's screener prompt skips above 30
 strategy:
   shape: bidask
   sides: quote_only                # one-sided SOL/quote below the price

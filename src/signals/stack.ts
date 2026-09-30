@@ -15,6 +15,7 @@ import { AthLookup } from "../features/ath.ts";
 import { RugDetector } from "../features/rugDetector.ts";
 import { SmartLpLookup } from "../features/smartLp.ts";
 import { auditLookup, type AuditRow } from "../features/safetyData.ts";
+import { binUtilization, priceChangePct, realizedVolatilityPct, volumeAuthenticity } from "../features/poolQuality.ts";
 
 export interface DecisionStack {
   scoring: ScoringRunner;
@@ -93,11 +94,22 @@ export function buildDecisionStack(
       const a = token && audit ? audit(token, t) : null;
       const born = a ? (a.token_created_at ?? a.first_pool_at) : null;
       const sec = token ? security(token, t) : null;
+      const tr = scoring.scorer.trackers.get(pool);
+      const winMs = 5 * 60_000; // fixed 5-minute window for this journaled context, independent of any preset
+      const volatilityPct = tr ? realizedVolatilityPct(tr.prices, t, winMs) : null;
+      const binUtil = tr ? binUtilization(tr.snap) : null;
       return {
         tokenAgeHours: born !== null && born !== undefined ? Math.max(0, (t - born) / 3_600_000) : null, mcapUsd: a?.mcap_usd ?? null,
         riskIsBase: m ? !bluechip.has(m.tokenX) : undefined,
         top10Pct: sec?.top10_pct ?? a?.top_holders_pct ?? null, holders: sec?.total_holders ?? a?.holder_count ?? null,
         organic: a?.organic_score ?? null, botHoldersPct: a?.bot_holders_pct ?? null, bundlerPct: a?.bundler_holding_pct ?? null,
+        volatilityPct, priceChangePct: tr ? priceChangePct(tr.prices, t, winMs) : null, binUtilization: binUtil, tokenFeesSol: a?.fees_sol ?? null,
+        volumeAuthScore: tr
+          ? volumeAuthenticity(
+              { tvlUsd: tr.metrics?.tvlUsd ?? null, volume24hUsd: tr.metrics?.volume24h ?? null, fee1hUsd: tr.metrics?.fee1h ?? null, volume1hUsd: tr.metrics?.volume1h ?? null },
+              c.simulation.volume_authenticity,
+            )?.score ?? null
+          : null,
       };
     },
     expectedFeeUsd: (pool, valueUsd) => {
@@ -205,6 +217,11 @@ export function presetInputsOf(
     mcapUsd: sec?.supply_ui && tokenUsd !== null ? sec.supply_ui * tokenUsd : (au?.mcap_usd ?? null),
     top10Pct: sec?.top10_pct ?? au?.top_holders_pct ?? null,
     botHoldersPct: au?.bot_holders_pct ?? null,
+    bundlerPct: au?.bundler_holding_pct ?? null,
     bluechip: token === null,
+    volatilityPct: realizedVolatilityPct(tr.prices, t, winMs),
+    priceChangePct: priceChangePct(tr.prices, t, winMs),
+    tokenFeesSol: au?.fees_sol ?? null,
+    binUtilization: binUtilization(snap),
   };
 }

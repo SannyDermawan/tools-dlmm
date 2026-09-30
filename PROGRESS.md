@@ -731,6 +731,76 @@ Session `16aea039` (2 h, config `session-2h.yaml`): 6161 positions, 0 gap-tainte
 - Data needed: about 5 two-hour sessions on different days / hours for the market cap and top-10 buckets (the unit is the pool, not the position: one pool can be 190 positions), about 20 detected rugs for the screens in `dlmm rugs`. Smart-LP presence is journaled from now on, so sessions before this change cannot be used for it.
 - Next (needs more sessions first): smart-LP presence as an entry filter, cluster / funding analysis of holders (only with a stable public source), combined entry mode.
 
+## Five external projects, read from source (2026-09-30) ✅, with corrections to the first pass
+
+The first pass (earlier the same day, mostly READMEs) contained mistakes; this section is the corrected
+result of reading the code. The full per-strategy record is `registry/strategies.yaml` (`dlmm registry`).
+
+**What each project really is**
+- `yunus-0x/meridian`: live LLM agent. Code-level hard skips (index.js): token fees < 30 SOL, top 10 real
+  holders > 60 %. Bundlers > 30 % and the narrative check are rules in the LLM prompt. Its strategy library has
+  five strategies (custom_ratio_spot, single_sided_reseed, fee_compounding, multi_layer, partial_harvest): our
+  grid variants partial_harvest / fee_compounding / single_sided_reseed come from it. No "evil_panda" there.
+- `fciaf420/meridian`: fork (488 commits ahead). **`evil_panda` exists only here**: single-sided SOL Spot 80 %
+  below the price; entry only with token 24 h volume >= $750k, mcap >= $200k and a green 5-minute Supertrend
+  with price above it; exit only while PnL is positive, on RSI(2) > 90 plus Bollinger-upper or first green MACD
+  histogram. There is no flip in it.
+- `irfndi/prism-liquidity-agent`: mature (510 files, 2,000+ tests), rule-based. Its production ledger is a loss
+  (393 closes, win rate 46 %, -$190, profit factor 0.31) and its own audit (churn-guard.ts, pnl-halt.ts) blames
+  trade count: two churned pools lost $228 over 346 round trips while holding the first pool would have gained
+  $17. "Jev" is an external model service (TypeSafe System One) used only in shadow / advisory mode: four narrow
+  judgments (deposit shape, toxic flow, recovery hold, regime stress), each logged next to its deterministic
+  verdict and never driving ENTER / EXIT. The agent overlay has modes: default `veto` (may only lower confidence
+  or force HOLD), `suggest`, `supervised`, `full` (may change the action): the "veto only" statement holds for the
+  default mode only.
+- `DeltaLogicLabs/Mantis`: paper-only scaffold. Live trading is "not yet implemented"; ops/backtest.ts runs on
+  random-walk mock data; paper positions never accrue fees; its fee/IL ratio divides 24 h fees by an IL computed
+  from the drift of the active bin against the centre of the fetched window (not from the position's entry).
+  Its filters are the older copy of what Prism refined.
+- `hummingbot/hummingbot`: `controllers/generic/lp_rebalancer` is the public LP loop: BUY = quote-only below
+  the price, SELL = base-only above; the executor auto-closes when the price passes the range by
+  `rebalance_threshold_pct`; the next side follows from where the price left (price >= upper -> BUY, < lower ->
+  SELL); documented default size $50. **That loop, not Meridian's evil_panda, is what our `yunus_flip`
+  approximates.** `TripleBarrierConfig` (stop / take profit / time limit / trailing) belongs to
+  `position_executor` (directional), not to the LP executor.
+
+**Corrections to the first pass**
+- Top 10 > 60 % IS a hard code skip in Meridian (I had said the base path has none); `max_top10_pct: 60` matches.
+  Bot holders have no Meridian threshold (ours, 30, is our own). `presets/meridian.yaml` comments fixed.
+- Meridian's `maxVolatility` / `maxPriceChangePct` are fields of Meteora's **pool-discovery API**
+  (`pool-discovery-api.datapi.meteora.ag/pools`, keyless): `volatility` (0 parked, ~4 moving at 5 m),
+  `pool_price_change_pct`. Our own volatility (stddev of 1-minute log returns) is on another scale; no
+  Meridian number is copied. Our collectors do not use that API yet.
+- Prism's volume-authenticity is a penalty sum, not "fraction of checks passed", and uses 24 h volume:
+  1 - 0.3 (24 h volume / TVL > 10) or 0.15 (> 5) - 0.2 (measured fees / volume outside 0.02-2 %) - 0.5
+  (TVL < $5k with 24 h volume > $100k); unknown inputs give "unknown", never 1. Reimplemented to match
+  (`src/features/poolQuality.ts`, config `simulation.volume_authenticity`). My first version invented its
+  constants and returned 1 on missing data.
+- Volatility is now resampled to 1-minute closes: before, it depended on the state-feed rate.
+- The gas-aware rebalance gate compares the rebalance cost with the expected fee over the 2 h edge horizon;
+  Prism asks for 3 days of fees, which is 36x more permissive. New knob `simulation.gas_aware_horizon_hours`
+  (default 2, exit_engine unchanged); it was a silent difference before.
+- Mantis's IL formula is not a useful cross-check (see above); ours (`valueUsd - hodlUsd` from the simulated
+  bins) stays.
+- Tag: `yunus_flip` is built from tweet summaries (unverified) and is not Meridian's evil_panda.
+
+**Implemented from this reading** (`min_*` / `max_*` filters are off by default, journaled for the report):
+volume authenticity score (journaled per position), gas-aware rebalance for `rebalance_out_of_range`
+(`simulation.gas_aware_rebalance`, close reason `rebalance_out_of_range:rebalance_not_worth`), Meridian preset
+filters `min_token_fees_sol` (`token_audit.fees_sol` is populated: 353 audits, minimum 28 SOL, so Meridian's 30
+would almost never fire on current pools), `min_bin_utilization`, `max_volatility`, `max_price_change_pct`,
+`max_bundlers_pct`; report dimensions for volume authenticity, bin utilization, volatility.
+
+**Not implemented, recorded as candidates** (registry): evil_panda (needs MACD; Supertrend, RSI, Bollinger exist),
+Prism fallen-angel (ATH drawdown is already journaled and sliced), Prism runner / launch posture.
+
+**Lessons worth keeping (Prism's own audit, consistent with our cost numbers):** trade count is the damage
+mechanism for a small account; a 46 % win rate can still lose; entry filters must not suppress exits; do not
+lower thresholds to manufacture trades; judge a candidate against a baseline on the same snapshots and a later
+period. Explicitly not adopted: LLM decision loops, Meridian's lessons / autoresearch (non-reproducible), its
+HiveMind (sends data to an outside server), Darwinian weights (its own signal tracker admits that deploy-time
+persistence is not wired).
+
 ## RPC: Helius Free + swap stream redesign (2026-09-29)
 - `.env` points to Helius (Free: 1M credits/month, 10 rps). Rate limits: critical 3 rps +
   swap stream 5 rps + token security 0.75 rps.

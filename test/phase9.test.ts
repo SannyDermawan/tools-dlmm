@@ -363,6 +363,7 @@ describe("Meridian preset (addendum 2.3)", () => {
   const good: PresetInputs = {
     feeActiveTvlPct: 0.2, tvlUsd: 50_000, volumeUsd: 5_000, binStep: 100, organic: null, holders: 2_000,
     mcapUsd: 1_000_000, top10Pct: 30, botHoldersPct: null, bluechip: false,
+    volatilityPct: null, priceChangePct: null, tokenFeesSol: null, binUtilization: null, bundlerPct: null,
   };
 
   it("loads the preset file; exit is one tp_sl_combo with the Meridian defaults", () => {
@@ -382,6 +383,36 @@ describe("Meridian preset (addendum 2.3)", () => {
     expect(evaluateMeridian(preset, { ...good, top10Pct: 70, mcapUsd: 50_000 }).failed).toEqual(["mcap", "top10"]);
     expect(evaluateMeridian(preset, { ...good, organic: 80, botHoldersPct: 10 }).missing).toEqual([]);
     expect(evaluateMeridian(preset, { ...good, holders: null, bluechip: true }).missing).toEqual([]);
+  });
+
+  it("the optional pool-quality filters (volatility, price change, token fees, bin utilization) are off by default", () => {
+    // presets/meridian.yaml ships them as null; missing inputs on `good` (also null) still pass
+    expect(preset.pool_filter.max_volatility).toBeNull();
+    expect(evaluateMeridian(preset, good).failed).toEqual([]);
+  });
+
+  it("each optional filter fails closed on missing data once its preset value is set, and can pass or fail on real data", () => {
+    const withVol = { ...preset, pool_filter: { ...preset.pool_filter, max_volatility: 5 } };
+    expect(evaluateMeridian(withVol, good).failed).toEqual(["volatility:missing"]);
+    expect(evaluateMeridian(withVol, { ...good, volatilityPct: 3 }).failed).toEqual([]);
+    expect(evaluateMeridian(withVol, { ...good, volatilityPct: 9 }).failed).toEqual(["volatility"]);
+
+    const withChange = { ...preset, pool_filter: { ...preset.pool_filter, max_price_change_pct: 50 } };
+    expect(evaluateMeridian(withChange, { ...good, priceChangePct: -80 }).failed).toEqual(["price_change"]); // |change|, not raw
+    expect(evaluateMeridian(withChange, { ...good, priceChangePct: 20 }).failed).toEqual([]);
+
+    const withFees = { ...preset, pool_filter: { ...preset.pool_filter, min_token_fees_sol: 30 } };
+    expect(evaluateMeridian(withFees, { ...good, tokenFeesSol: 10 }).failed).toEqual(["token_fees_sol"]);
+    expect(evaluateMeridian(withFees, { ...good, tokenFeesSol: 30 }).failed).toEqual([]);
+
+    const withBundlers = { ...preset, token_filter: { ...preset.token_filter, max_bundlers_pct: 30 } };
+    expect(evaluateMeridian(withBundlers, { ...good, bundlerPct: 45 }).failed).toEqual(["bundlers"]);
+    expect(evaluateMeridian(withBundlers, { ...good, bundlerPct: 10 }).failed).toEqual([]);
+    expect(evaluateMeridian(withBundlers, good).missing).toContain("bundlers"); // unknown -> preset_parsial, not a fail
+
+    const withUtil = { ...preset, pool_filter: { ...preset.pool_filter, min_bin_utilization: 0.3 } };
+    expect(evaluateMeridian(withUtil, { ...good, binUtilization: 0.2 }).failed).toEqual(["bin_utilization"]);
+    expect(evaluateMeridian(withUtil, { ...good, binUtilization: 0.5 }).failed).toEqual([]);
   });
 
   it("GridRunner opens the preset position in the top-N passing pools, flagged preset_partial", () => {

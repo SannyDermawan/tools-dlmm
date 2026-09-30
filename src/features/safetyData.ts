@@ -16,6 +16,7 @@ export interface AuditRow {
   dev_balance_pct: number | null;
   bot_holders_pct: number | null;
   bundler_holding_pct?: number | null;
+  fees_sol: number | null;
   is_sus: number | null;
   pvp_rival_count: number | null;
 }
@@ -28,7 +29,7 @@ export function auditLookup(db: Db, maxAgeMs: number) {
     if (cache.has(k)) return cache.get(k)!;
     const r = db.get<AuditRow>(
       `SELECT token, ts, symbol, organic_score, holder_count, mcap_usd, launchpad, dev, token_created_at, first_pool_at, top_holders_pct,
-              dev_balance_pct, bot_holders_pct, bundler_holding_pct, is_sus, pvp_rival_count
+              dev_balance_pct, bot_holders_pct, bundler_holding_pct, fees_sol, is_sus, pvp_rival_count
        FROM token_audit WHERE token = ? AND ts <= ? AND error IS NULL ORDER BY ts DESC LIMIT 1`,
       token, t,
     );
@@ -43,7 +44,7 @@ export function auditLookup(db: Db, maxAgeMs: number) {
 export function auditAt(db: Db, token: string, t: number): AuditRow | null {
   return db.get<AuditRow>(
     `SELECT token, ts, symbol, organic_score, holder_count, mcap_usd, launchpad, dev, token_created_at, first_pool_at, top_holders_pct,
-            dev_balance_pct, bot_holders_pct, bundler_holding_pct, is_sus, pvp_rival_count
+            dev_balance_pct, bot_holders_pct, bundler_holding_pct, fees_sol, is_sus, pvp_rival_count
      FROM token_audit WHERE token = ? AND ts <= ? AND error IS NULL ORDER BY ts DESC LIMIT 1`,
     token, t,
   ) ?? null;
