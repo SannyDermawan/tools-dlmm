@@ -7,6 +7,10 @@ session:
   label: sesi-2jam
 grid:
   cohort_interval_minutes: 30        # cohorts at +15, +45, +75 min
+  signal_entry:
+    trigger: both                    # signal modes also enter when a pool's signal turns admitted (MASUK
+                                     # lasts about a minute: at the 3 cohort instants of the first 2 h
+                                     # session every pool was LEWATI and signal_enter opened nothing)
 collectors:
   swap_stream:
     credit_budget: 20000             # ~40% of the 5 h budget

@@ -13,6 +13,7 @@ import { SignalBook } from "./signalEngine.ts";
 import { PoolMemory } from "../features/memory.ts";
 import { AthLookup } from "../features/ath.ts";
 import { RugDetector } from "../features/rugDetector.ts";
+import { SmartLpLookup } from "../features/smartLp.ts";
 import { auditLookup, type AuditRow } from "../features/safetyData.ts";
 
 export interface DecisionStack {
@@ -73,6 +74,9 @@ export function buildDecisionStack(
     },
   );
   const athLookup = new AthLookup(db);
+  // smart LPs present in a pool at entry (journaled with every position; look-ahead safe, see SmartLpLookup)
+  const lpPools = [...metaOf.keys()]; // grows with pools added during a session (reloaded every 10 min)
+  const smartLp = c.real_lp.enabled ? new SmartLpLookup(db, c.real_lp.smart, lpPools) : null;
   const gridSignals: GridSignals = {
     book,
     ath: (pool, t) => {
@@ -82,14 +86,18 @@ export function buildDecisionStack(
     exitEngine,
     memory,
     indicators: scoring.indicators ?? undefined,
+    smartLp: smartLp ? (pool, t) => { const r = smartLp.at(pool, t); return r ? { smart: r.count, openPositions: r.openPositions } : null; } : undefined,
     tokenInfo: (pool, t) => {
       const m = metaOf.get(pool);
       const token = m ? (bluechip.has(m.tokenX) ? (bluechip.has(m.tokenY) ? null : m.tokenY) : m.tokenX) : null;
       const a = token && audit ? audit(token, t) : null;
       const born = a ? (a.token_created_at ?? a.first_pool_at) : null;
+      const sec = token ? security(token, t) : null;
       return {
         tokenAgeHours: born !== null && born !== undefined ? Math.max(0, (t - born) / 3_600_000) : null, mcapUsd: a?.mcap_usd ?? null,
         riskIsBase: m ? !bluechip.has(m.tokenX) : undefined,
+        top10Pct: sec?.top10_pct ?? a?.top_holders_pct ?? null, holders: sec?.total_holders ?? a?.holder_count ?? null,
+        organic: a?.organic_score ?? null, botHoldersPct: a?.bot_holders_pct ?? null, bundlerPct: a?.bundler_holding_pct ?? null,
       };
     },
     expectedFeeUsd: (pool, valueUsd) => {
@@ -141,6 +149,7 @@ export function buildDecisionStack(
   };
   const addPool = (m: PoolMeta, swapsCollected: boolean) => {
     metaOf.set(m.pool, m);
+    if (!lpPools.includes(m.pool)) lpPools.push(m.pool);
     scoring.addPool(m, swapsCollected);
   };
   return { scoring, book, exitEngine, gridSignals, latestScore, memory, rugs, attach: (r) => (runnerRef = r), addPool };
