@@ -714,6 +714,23 @@ screened out). 45 minutes cannot finish a cycle: every position closed at the se
 same pools and cohorts (report: "group comparison", "pool-selection effect"), and use `dlmm portfolio -m yunus_flip`
 for the one-at-a-time account.
 
+## Second laptop 2 h session and the "Fomo / Moby / GMGN" screening playbook (2026-09-30) ✅
+
+Session `16aea039` (2 h, config `session-2h.yaml`): 6161 positions, 0 gap-tainted, 3 fresh pools added mid-session ("fresh pool added" seen live for the first time), `lp realism` fee difference median -2.7 % / PnL difference -0.12 pp before and -0.41 pp after costs. Baseline average -5.0 % (memecoin -5.7 %, bluechip -0.4 %), `yunus_flip` +2.8 pp vs baseline (190 positions, 2 cohorts), `friday_scalp` 7 positions, -3.1 pp (too few).
+
+**Why only three entry modes showed up.**
+- `signal_enter` / `signal_watch`: 0 positions. A MASUK signal lasts about a minute (26 MASUK of about 3000 signals) and with `signal_entry.trigger: cohort` the modes look only at the 3 cohort instants; at all three, every pool was LEWATI. `config/session-2h.yaml` now sets `trigger: both` (event entries exist since stage 4).
+- `meridian_preset`: evaluated 75, passed 0. The screen (TVL 10-150k, bin step 80-125, fee/TVL, mcap >= 150k, organic >= 60, holders >= 500, top-10 <= 60 %, bot <= 30 %) is strict; the stats now count **why** pools fail (`grid.preset.failed`, in the report notes) so the filter can be judged from data.
+- Fresh-lane pools are already in the grid's pool set, so they are evaluated by Meridian, Friday and Yunus without changes.
+
+**Screening playbook of a manual trader (tweet: trending on Fomo, market cap 500k-2M, GMGN / Rugcheck / Bubblemaps, "if all safe, buy").** Analysed for what is testable; nothing was adopted as a rule.
+- Every position now journals its token context at entry next to market cap: top-10 holders, holders, organic score, bot holder %, bundler %, and the number of smart LP wallets with an open position in the pool (`smart_lp_open`, null = no real-LP data for the pool) plus all open real positions there (`lp_positions_open`) (`grid_combo`; smart status is look-ahead safe, `SmartLpLookup`). Run `dlmm lp collect` before a session so the pools have real-LP data; the report slices by these. The session report and `analyze` slice by finer market cap buckets (< $500k, $500k-1M, $1-2M, $2-5M, $5-20M, >= $20M) and by top-10 / organic / holders / bundler buckets.
+- `dlmm rugs [--lead MIN]`: rug post-mortem. For every token our detector flagged (`blocklist_tokens`, source `auto_rug`) it reads the audit / security / flow rows at least `lead` minutes before the rug and shows which screens (Friday market cap band, Meridian token filters, authorities, token age, bundlers) would have kept a position out, next to the share of the other audited tokens the same screen would also have thrown away.
+- First numbers (n = 2 rugs, not significant): SI-SOL (the pool with the highest volume) rugged 1.1 h after token creation with market cap $938k (inside the 500k-2M band), top-10 23 %, 5531 holders, organic 76, bundlers 0.6 %, no authorities: every "looks safe" check passed; only bot holders (31 %) and token age would have caught it. The other rug (ARTHUR-SOL) had no audit row yet (the pool was added 10 min before). Market cap $500k-1M had -22 % on baseline positions and $1-2M -2.4 %, but the first bucket is one pool (192 positions).
+- Not done, on purpose: scraping Fomo / Moby / GMGN / Bubblemaps (no official API), trending lists as a signal (no history, hype chasing), an LLM or social sentiment choosing entries, a binary "all safe = enter" rule.
+- Data needed: about 5 two-hour sessions on different days / hours for the market cap and top-10 buckets (the unit is the pool, not the position: one pool can be 190 positions), about 20 detected rugs for the screens in `dlmm rugs`. Smart-LP presence is journaled from now on, so sessions before this change cannot be used for it.
+- Next (needs more sessions first): smart-LP presence as an entry filter, cluster / funding analysis of holders (only with a stable public source), combined entry mode.
+
 ## RPC: Helius Free + swap stream redesign (2026-09-29)
 - `.env` points to Helius (Free: 1M credits/month, 10 rps). Rate limits: critical 3 rps +
   swap stream 5 rps + token security 0.75 rps.

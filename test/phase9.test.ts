@@ -409,6 +409,8 @@ describe("Meridian preset (addendum 2.3)", () => {
       book: new SignalBook(null, c, "S", "v"),
       preset: { ...preset, ranking: { top_n: 1 } },
       presetInputs: (pool) => inputs[pool],
+      smartLp: (pool) => (pool === "A" ? { smart: 2, openPositions: 5 } : null),
+      tokenInfo: () => ({ tokenAgeHours: 1, mcapUsd: 900_000.4, top10Pct: 23.04, holders: 5531, organic: 76.04, botHoldersPct: 31.44, bundlerPct: 0.64 }),
     });
     runner.onTick(MIN);
     const mer = [...sims.values()].flatMap((s) => s.list()).filter((p) => p.spec.entryMode === "meridian_preset");
@@ -417,7 +419,9 @@ describe("Meridian preset (addendum 2.3)", () => {
     expect(mer[0].spec).toMatchObject({ strategy: "bidask", sides: "quote_only", binsBelow: 69, binsAbove: 0 });
     expect(mer[0].spec.exitPolicy!.type).toBe("tp_sl_combo");
     expect(mer[0].spec.combo).toMatchObject({ preset_partial: true, preset_rank: 1 });
-    expect(runner.stats.preset).toEqual({ evaluated: 3, passed: 2, opened: 1, partial: 1 });
+    expect(runner.stats.preset).toEqual({ evaluated: 3, passed: 2, opened: 1, partial: 1, failed: { tvl: 1 } });
+    // token context at entry is journaled with every position (report buckets: market cap, top-10, ...)
+    expect(mer[0].spec.combo).toMatchObject({ mcap_usd: 900_000, top10_pct: 23, holders: 5531, organic: 76, bot_holders_pct: 31.4, bundler_pct: 0.6, smart_lp_open: 2, lp_positions_open: 5 });
     // baseline still enters every pool
     expect([...sims.values()].every((s) => s.list().some((p) => p.spec.entryMode === "all_pools_baseline"))).toBe(true);
   });

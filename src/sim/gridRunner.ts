@@ -198,7 +198,7 @@ export interface GridStats {
   /** closes by PnL policy reason (take_profit, stop_loss, trailing_tp, low_yield, ...) */
   pnlExits: Record<string, number>;
   variantActions: { partial_harvest: number; fee_compounding: number; single_sided_reseed: number };
-  preset: { evaluated: number; passed: number; opened: number; partial: number };
+  preset: { evaluated: number; passed: number; opened: number; partial: number; failed: Record<string, number> };
   /** Friday playbook entries: pools screened, positions opened (first + re-entries), screen failures */
   friday: { evaluated: number; opened: number; reentries: number; failed: Record<string, number> };
   /** Yunus flip entries: combinations screened, cycles opened (first + re-entries), flips done, cycles completed, screen failures */
@@ -231,7 +231,11 @@ export interface GridSignals {
   /** preset override (tests); default: loaded from config presets.meridian */
   preset?: MeridianPreset;
   /** risk token facts at t for the journal (coin selection dimensions in the report) */
-  tokenInfo?: (pool: string, t: number) => { tokenAgeHours: number | null; mcapUsd: number | null; /** the risk token is the base token X */ riskIsBase?: boolean } | null;
+  /** smart LP wallets with an open position in the pool, and all open real positions there (null = no real-LP data for the pool) */
+  smartLp?: (pool: string, t: number) => { smart: number; openPositions: number } | null;
+  tokenInfo?: (pool: string, t: number) => { tokenAgeHours: number | null; mcapUsd: number | null; /** the risk token is the base token X */ riskIsBase?: boolean;
+    /** token context at entry, journaled with every position (null = unknown) */
+    top10Pct?: number | null; holders?: number | null; organic?: number | null; botHoldersPct?: number | null; bundlerPct?: number | null } | null;
   /** highest price (pool quote units) seen up to t, only for pools whose risk token is the base (ath_drawdown_pct) */
   ath?: (pool: string, t: number) => number | null;
   /** one-minute flow of a pool at t (flow exits, Friday entry confirmation) */
@@ -285,7 +289,7 @@ export class GridRunner {
   readonly stats: GridStats = {
     cohorts: 0, requested: 0, skippedPools: 0, rebalances: 0, policyExits: 0, rebalanceNotWorth: 0, signalEntries: {}, pnlExits: {},
     variantActions: { partial_harvest: 0, fee_compounding: 0, single_sided_reseed: 0 },
-    preset: { evaluated: 0, passed: 0, opened: 0, partial: 0 }, friday: { evaluated: 0, opened: 0, reentries: 0, failed: {} }, yunus: { evaluated: 0, opened: 0, reentries: 0, flips: 0, cycles: 0, failed: {} }, cooldownSkips: 0, filterSkips: {}, deferredEntries: 0, widthSkips: 0, events: { detected: 0, opened: 0, skipped: {} }, capped: false,
+    preset: { evaluated: 0, passed: 0, opened: 0, partial: 0, failed: {} }, friday: { evaluated: 0, opened: 0, reentries: 0, failed: {} }, yunus: { evaluated: 0, opened: 0, reentries: 0, flips: 0, cycles: 0, failed: {} }, cooldownSkips: 0, filterSkips: {}, deferredEntries: 0, widthSkips: 0, events: { detected: 0, opened: 0, skipped: {} }, capped: false,
   };
   /** latest signal action per pool at the previous scoring round (rising-edge detection) */
   private readonly lastAction = new Map<string, string | null>();
@@ -443,6 +447,7 @@ export class GridRunner {
     const ti = this.signals?.tokenInfo?.(m.pool, ts) ?? null;
     const px = sim.priceUi;
     const dd = px ? athDrawdownPct(px, this.signals?.ath?.(m.pool, ts) ?? null) : null;
+    const lp = this.signals?.smartLp?.(m.pool, ts) ?? null;
     const combo = {
       ...spec.combo,
       ath_drawdown_pct: dd === null ? null : round(dd, 1),
@@ -451,6 +456,13 @@ export class GridRunner {
       pool_age_h: m.createdAt ? round((ts - m.createdAt) / 3_600_000, 2) : null,
       token_age_h: ti?.tokenAgeHours != null ? round(ti.tokenAgeHours, 2) : null,
       mcap_usd: ti?.mcapUsd != null ? Math.round(ti.mcapUsd) : null,
+      top10_pct: ti?.top10Pct != null ? round(ti.top10Pct, 1) : null,
+      holders: ti?.holders ?? null,
+      organic: ti?.organic != null ? round(ti.organic, 1) : null,
+      bot_holders_pct: ti?.botHoldersPct != null ? round(ti.botHoldersPct, 1) : null,
+      bundler_pct: ti?.bundlerPct != null ? round(ti.bundlerPct, 1) : null,
+      smart_lp_open: lp ? lp.smart : null,
+      lp_positions_open: lp ? lp.openPositions : null,
     };
     return sim.request({ ...spec, combo }, ts);
   }
@@ -551,6 +563,7 @@ export class GridRunner {
       this.stats.preset.evaluated++;
       const ev = evaluateMeridian(pr, x);
       if (ev.pass) passing.push({ sim, ev });
+      else for (const k of ev.failed) this.stats.preset.failed[k] = (this.stats.preset.failed[k] ?? 0) + 1;
     }
     this.stats.preset.passed += passing.length;
     passing.sort((a, b) => b.ev.score - a.ev.score);

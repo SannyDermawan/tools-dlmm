@@ -417,6 +417,16 @@ macroCmd
     app.db.close();
   });
 
+program
+  .command("rugs")
+  .description("rug post-mortem: what the tokens flagged by the rug detector looked like before the rug, and which entry screens would have caught them")
+  .option("--lead <minutes>", "read the features at least this long before the rug", parseFloat, 10)
+  .action(async (opts) => {
+    const app = createApp(cfgPath());
+    const { rugReport, rugReportMarkdown } = await import("./analysis/rugs.ts");
+    console.log(rugReportMarkdown(rugReport(app.db, opts.lead)));
+    app.db.close();
+  });
 const lpCmd = program.command("lp").description("real LP positions of other wallets (phase 11): collection, smart LPs, simulator realism");
 lpCmd
   .command("collect")

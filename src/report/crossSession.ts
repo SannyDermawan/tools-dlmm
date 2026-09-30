@@ -72,6 +72,9 @@ export function analyzeSessions(db: Db, sessions: SessionPick[], holdout: number
       ["bins per side", "CAST(json_extract(p.grid_combo,'$.bins_per_side') AS TEXT)"],
       ["exit policy", "json_extract(p.grid_combo,'$.exit_policy')"],
       ["pool category", "(SELECT category FROM pools WHERE pool = p.pool)"],
+      ["market cap at entry", "CASE WHEN json_extract(p.grid_combo,'$.mcap_usd') IS NULL THEN 'unknown' WHEN json_extract(p.grid_combo,'$.mcap_usd') < 500000 THEN '1) < $500k' WHEN json_extract(p.grid_combo,'$.mcap_usd') < 1000000 THEN '2) $500k-1M' WHEN json_extract(p.grid_combo,'$.mcap_usd') < 2000000 THEN '3) $1-2M' WHEN json_extract(p.grid_combo,'$.mcap_usd') < 5000000 THEN '4) $2-5M' WHEN json_extract(p.grid_combo,'$.mcap_usd') < 20000000 THEN '5) $5-20M' ELSE '6) >= $20M' END"],
+      ["smart LPs with an open position at entry", "CASE WHEN json_extract(p.grid_combo,'$.smart_lp_open') IS NULL THEN 'unknown (no real-LP data)' WHEN json_extract(p.grid_combo,'$.smart_lp_open') = 0 THEN 'none' WHEN json_extract(p.grid_combo,'$.smart_lp_open') < 3 THEN '1-2' ELSE '>= 3' END"],
+      ["top-10 holders at entry", "CASE WHEN json_extract(p.grid_combo,'$.top10_pct') IS NULL THEN 'unknown' WHEN json_extract(p.grid_combo,'$.top10_pct') < 20 THEN '< 20%' WHEN json_extract(p.grid_combo,'$.top10_pct') < 40 THEN '20-40%' WHEN json_extract(p.grid_combo,'$.top10_pct') < 60 THEN '40-60%' ELSE '>= 60%' END"],
     ] as const) {
       const rows = db.all<{ k: string; sid: string; n: number; net: number }>(
         `SELECT ${expr} k, p.session_id sid, COUNT(*) n, AVG(r.net_pnl_pct) net
