@@ -12,13 +12,16 @@ pool_filter:
   max_bin_step: 125
   max_volatility: null             # null = off. config.js `maxVolatility: 8` is the `volatility` field of Meteora's
                                     # pool-discovery API (timeframe 5m; ~0 for a parked pool, ~4 for a moving one).
-                                    # We do not collect that API yet; our own figure (stddev of 1-minute log returns,
-                                    # %) is on another scale, so no Meridian number is copied.
+                                    # We collect that API (collectors.pool_discovery) and compare against its value
+                                    # at fee_window; 8 is Meridian's number. Rows missing or stale -> `volatility:missing`.
   max_price_change_pct: null       # null = off. config.js `maxPriceChangePct: 300` (pool price change over the timeframe)
   min_token_fees_sol: null         # null = off. config.js `minTokenFeesSol: 30`: total priority / jito fees ALL traders of
                                     # the token paid (not LP fees) = datapi `fees`, our token_audit.fees_sol (SOL). Meridian
                                     # hard-skips below 30 (index.js hardSkipReason). In our data the smallest of 353 audits
                                     # is 28 SOL, so on the current pools it would almost never fire.
+  block_critical_warnings: false   # false = off. Meridian's discovery query requires base_token_has_critical_warnings=false
+                                    # and quote_token_has_critical_warnings=false (Meteora's flags, e.g. TRANSFER_FEE_CONFIGURED);
+                                    # we read the same warnings from the pool-discovery API (pool_discovery.warnings_x / _y)
   min_bin_utilization: null        # null = off. Prism / Mantis MIN_BIN_UTILIZATION 0.30 (share of bins in [lower, upper]
                                     # with supply > 0; low -> liquidity clumped)
 token_filter:

@@ -162,6 +162,14 @@ collectors:
     enabled: true                  # bundlers from the unofficial datapi); 1-2 batch requests per minute
     interval_seconds: 60
     max_age_seconds: 150           # older rows count as missing (a flow trigger without data never fires)
+  pool_discovery:                  # Meteora pool-discovery API (keyless HTTP, no RPC credits): volatility, price trend,
+    enabled: true                  # LP net deposits, unique traders, holder change per window; Meridian screens on it
+    base_url: https://pool-discovery-api.datapi.meteora.ag
+    interval_seconds: 60           # one request per timeframe and per batch_size pools
+    timeframes: ["5m"]             # window of every rate; the Meridian preset's fee_window must be one of them
+    batch_size: 50                 # pools per request (`pool_address in [...]`; 40 pools = one second, ~150 KB)
+    max_rps: 2
+    max_age_seconds: 150           # older rows count as missing
   token_audit:                     # Jupiter audit (phase 10): organic score, bot holders, launchpad, dev
     enabled: true
     interval_minutes: 15           # cache: one batch request per 15 min

@@ -801,6 +801,40 @@ period. Explicitly not adopted: LLM decision loops, Meridian's lessons / autores
 HiveMind (sends data to an outside server), Darwinian weights (its own signal tracker admits that deploy-time
 persistence is not wired).
 
+## Roadmap PHASE 2 (strategy decomposition) and the pool-discovery collector (2026-09-30) ✅
+
+**PHASE 2: every strategy in nine components.** `registry/strategies.yaml` now splits each of the 12 strategies into
+entry, filter, side, range, position_size, exit, reentry, rebalance and transaction_policy. Each component has the
+original rule, our implemented rule, a deviation (`none` identical, `minor` another value or data source, `major` a rule
+dropped / added / replaced, `unknown` the original is silent: only for summary sources, `n/a` nothing to compare) and a
+reason. `dlmm registry --id ID` prints one strategy's table, `--components` the strategy x component grid,
+`--component exit` one component across strategies (`--status` filters). `dlmm registry --check` enforces the rules
+(n/a exactly when there is nothing to compare, unknown only for summaries, a reason for every deviation, `faithful`
+only without major deviations). First reading of the grid: the **re-entry** component is where all three external
+strategies deviate most (the rules are ours, not the sources'), and Friday / Yunus sizes and transaction policies are
+`unknown` because the summaries do not state them. `test/registry.test.ts`: 21 tests.
+
+**Pool-discovery collector** (`src/collectors/poolDiscovery.ts`, migration `014_pool_discovery`, table `pool_discovery`).
+Meteora's keyless `pool-discovery-api.datapi.meteora.ag/pools` answers `pool_address in [a,b,...]`: 40 pools in one
+request (about 0.3-1 s, ~150 KB), HTTP only (no RPC credits), every minute (72 h profile: every 2 min). Per pool and
+timeframe it stores volatility (Meteora's unit), price change and trend, LP net deposits / total deposits and
+withdrawals (USD), unique traders and LPs, swap count, fee / active TVL, holders and market-cap change, permanent-lock
+share, base-token organic score, top holders, dev balance and the tokens' warnings. `collectors.pool_discovery`
+(`timeframes: ["5m"]`, the Meridian preset's `fee_window` must be one of them). Verified live: 30 pools -> 30 rows; a 4 min
+smoke session on a separate database polled it 4 times without error and journaled the fields on all 623 positions.
+- Every position journals `pd_timeframe`, `pd_volatility`, `pd_price_change_pct`, `pd_net_deposits_usd`,
+  `pd_unique_traders`, `pd_swap_count`, `pd_critical_warning` (lookup is look-ahead safe: latest row at or before the
+  decision, older than `max_age_seconds` = missing). The report and `analyze` slice by volatility, LP net deposits, unique
+  traders and critical warning (old sessions show "unknown").
+- Meridian preset: `max_volatility` and `max_price_change_pct` now compare the API's `volatility` / `pool_price_change_pct`
+  of the fee window (what Meridian means by them; our own 1-minute volatility stays journaled as `volatility_pct`), and
+  there is a new optional `block_critical_warnings` (Meridian's `base / quote_token_has_critical_warnings=false`). All off by
+  default. Real pools carry critical warnings (`TRANSFER_FEE_CONFIGURED`, `HAS_PERMANENT_DELEGATE`).
+- Roadmap PHASE 8 features now available from a public API: LP inflow (`net_deposits`), trader activity
+  (`unique_traders`, `swap_count`), holder acceleration (`base_holders_change_pct`). Not yet: smart-money activity,
+  wallet accumulation, trending rank.
+380 tests pass (`test/poolDiscovery.test.ts` new, registry / phase 9 / phase 0 updated).
+
 ## RPC: Helius Free + swap stream redesign (2026-09-29)
 - `.env` points to Helius (Free: 1M credits/month, 10 rps). Rate limits: critical 3 rps +
   swap stream 5 rps + token security 0.75 rps.

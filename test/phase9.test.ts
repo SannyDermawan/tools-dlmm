@@ -363,7 +363,7 @@ describe("Meridian preset (addendum 2.3)", () => {
   const good: PresetInputs = {
     feeActiveTvlPct: 0.2, tvlUsd: 50_000, volumeUsd: 5_000, binStep: 100, organic: null, holders: 2_000,
     mcapUsd: 1_000_000, top10Pct: 30, botHoldersPct: null, bluechip: false,
-    volatilityPct: null, priceChangePct: null, tokenFeesSol: null, binUtilization: null, bundlerPct: null,
+    volatility: null, criticalWarning: null, priceChangePct: null, tokenFeesSol: null, binUtilization: null, bundlerPct: null,
   };
 
   it("loads the preset file; exit is one tp_sl_combo with the Meridian defaults", () => {
@@ -394,8 +394,8 @@ describe("Meridian preset (addendum 2.3)", () => {
   it("each optional filter fails closed on missing data once its preset value is set, and can pass or fail on real data", () => {
     const withVol = { ...preset, pool_filter: { ...preset.pool_filter, max_volatility: 5 } };
     expect(evaluateMeridian(withVol, good).failed).toEqual(["volatility:missing"]);
-    expect(evaluateMeridian(withVol, { ...good, volatilityPct: 3 }).failed).toEqual([]);
-    expect(evaluateMeridian(withVol, { ...good, volatilityPct: 9 }).failed).toEqual(["volatility"]);
+    expect(evaluateMeridian(withVol, { ...good, volatility: 3 }).failed).toEqual([]);
+    expect(evaluateMeridian(withVol, { ...good, volatility: 9 }).failed).toEqual(["volatility"]);
 
     const withChange = { ...preset, pool_filter: { ...preset.pool_filter, max_price_change_pct: 50 } };
     expect(evaluateMeridian(withChange, { ...good, priceChangePct: -80 }).failed).toEqual(["price_change"]); // |change|, not raw
@@ -404,6 +404,12 @@ describe("Meridian preset (addendum 2.3)", () => {
     const withFees = { ...preset, pool_filter: { ...preset.pool_filter, min_token_fees_sol: 30 } };
     expect(evaluateMeridian(withFees, { ...good, tokenFeesSol: 10 }).failed).toEqual(["token_fees_sol"]);
     expect(evaluateMeridian(withFees, { ...good, tokenFeesSol: 30 }).failed).toEqual([]);
+
+    const withWarn = { ...preset, pool_filter: { ...preset.pool_filter, block_critical_warnings: true } };
+    expect(evaluateMeridian(withWarn, { ...good, criticalWarning: true }).failed).toEqual(["critical_warning"]);
+    expect(evaluateMeridian(withWarn, { ...good, criticalWarning: false }).failed).toEqual([]);
+    expect(evaluateMeridian(withWarn, good).failed).toEqual(["critical_warning:missing"]); // not collected: fail closed
+    expect(evaluateMeridian(preset, { ...good, criticalWarning: true }).failed).toEqual([]); // off by default
 
     const withBundlers = { ...preset, token_filter: { ...preset.token_filter, max_bundlers_pct: 30 } };
     expect(evaluateMeridian(withBundlers, { ...good, bundlerPct: 45 }).failed).toEqual(["bundlers"]);
@@ -441,7 +447,7 @@ describe("Meridian preset (addendum 2.3)", () => {
       preset: { ...preset, ranking: { top_n: 1 } },
       presetInputs: (pool) => inputs[pool],
       smartLp: (pool) => (pool === "A" ? { smart: 2, openPositions: 5 } : null),
-      tokenInfo: () => ({ tokenAgeHours: 1, mcapUsd: 900_000.4, top10Pct: 23.04, holders: 5531, organic: 76.04, botHoldersPct: 31.44, bundlerPct: 0.64 }),
+      tokenInfo: () => ({ tokenAgeHours: 1, mcapUsd: 900_000.4, top10Pct: 23.04, holders: 5531, organic: 76.04, botHoldersPct: 31.44, bundlerPct: 0.64, pdTimeframe: "5m", pdVolatility: 4.2214, pdPriceChangePct: -5.836, pdNetDepositsUsd: 124_657.9, pdUniqueTraders: 363, pdSwapCount: 69, pdCriticalWarning: true }),
     });
     runner.onTick(MIN);
     const mer = [...sims.values()].flatMap((s) => s.list()).filter((p) => p.spec.entryMode === "meridian_preset");
@@ -453,6 +459,7 @@ describe("Meridian preset (addendum 2.3)", () => {
     expect(runner.stats.preset).toEqual({ evaluated: 3, passed: 2, opened: 1, partial: 1, failed: { tvl: 1 } });
     // token context at entry is journaled with every position (report buckets: market cap, top-10, ...)
     expect(mer[0].spec.combo).toMatchObject({ mcap_usd: 900_000, top10_pct: 23, holders: 5531, organic: 76, bot_holders_pct: 31.4, bundler_pct: 0.6, smart_lp_open: 2, lp_positions_open: 5 });
+    expect(mer[0].spec.combo).toMatchObject({ pd_timeframe: "5m", pd_volatility: 4.221, pd_price_change_pct: -5.84, pd_net_deposits_usd: 124_658, pd_unique_traders: 363, pd_swap_count: 69, pd_critical_warning: 1 });
     // baseline still enters every pool
     expect([...sims.values()].every((s) => s.list().some((p) => p.spec.entryMode === "all_pools_baseline"))).toBe(true);
   });

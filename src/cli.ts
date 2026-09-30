@@ -419,12 +419,14 @@ macroCmd
 
 program
   .command("registry")
-  .description("strategy registry (roadmap PHASE 1): internal and external strategies, sources, fidelity, cost profile")
+  .description("strategy registry (roadmap PHASE 1-2): strategies, sources, fidelity, per-component decomposition")
   .option("--status <status>", "implemented | candidate | reference | excluded")
-  .option("--id <id>", "show one strategy in full")
+  .option("--id <id>", "show one strategy in full, with its component table")
+  .option("--components", "strategy x component grid of deviations")
+  .option("--component <name>", "one component across strategies: entry | filter | side | range | position_size | exit | reentry | rebalance | transaction_policy")
   .option("--check", "check the registry against grid.entry_modes; exit 1 on a problem")
   .action(async (opts) => {
-    const { loadRegistry, checkRegistry, registryMarkdown } = await import("./registry/strategies.ts");
+    const { loadRegistry, checkRegistry, registryMarkdown, registryComponentGrid, registryComponentMarkdown, COMPONENTS } = await import("./registry/strategies.ts");
     const reg = loadRegistry();
     if (opts.check) {
       const cfg = loadConfig(cfgPath()).config;
@@ -432,6 +434,15 @@ program
       console.log(problems.length ? problems.join(String.fromCharCode(10)) : `registry ok: ${reg.strategies.length} strategies`);
       if (problems.length) process.exitCode = 1;
       return;
+    }
+    if (opts.components) return void console.log(registryComponentGrid(reg));
+    if (opts.component) {
+      if (!(COMPONENTS as readonly string[]).includes(opts.component)) {
+        console.error(`unknown component ${opts.component}; one of ${COMPONENTS.join(", ")}`);
+        process.exitCode = 1;
+        return;
+      }
+      return void console.log(registryComponentMarkdown(reg, opts.component, { status: opts.status }));
     }
     console.log(registryMarkdown(reg, { status: opts.status, id: opts.id }));
   });

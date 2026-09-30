@@ -238,7 +238,10 @@ export interface GridSignals {
     top10Pct?: number | null; holders?: number | null; organic?: number | null; botHoldersPct?: number | null; bundlerPct?: number | null;
     /** pool-quality context at entry (5-minute window; see src/features/poolQuality.ts) */
     volatilityPct?: number | null; priceChangePct?: number | null; binUtilization?: number | null; tokenFeesSol?: number | null;
-    volumeAuthScore?: number | null } | null;
+    volumeAuthScore?: number | null;
+    /** Meteora pool-discovery API at entry (window pdTimeframe): its volatility, price change, LP net deposits (USD), unique traders, swaps */
+    pdTimeframe?: string | null; pdVolatility?: number | null; pdPriceChangePct?: number | null; pdNetDepositsUsd?: number | null;
+    pdUniqueTraders?: number | null; pdSwapCount?: number | null; pdCriticalWarning?: boolean | null } | null;
   /** highest price (pool quote units) seen up to t, only for pools whose risk token is the base (ath_drawdown_pct) */
   ath?: (pool: string, t: number) => number | null;
   /** one-minute flow of a pool at t (flow exits, Friday entry confirmation) */
@@ -471,6 +474,13 @@ export class GridRunner {
       bin_utilization: ti?.binUtilization != null ? round(ti.binUtilization, 3) : null,
       token_fees_sol: ti?.tokenFeesSol != null ? round(ti.tokenFeesSol, 2) : null,
       volume_auth_score: ti?.volumeAuthScore != null ? round(ti.volumeAuthScore, 2) : null,
+      pd_timeframe: ti?.pdTimeframe ?? null,
+      pd_volatility: ti?.pdVolatility != null ? round(ti.pdVolatility, 3) : null,
+      pd_price_change_pct: ti?.pdPriceChangePct != null ? round(ti.pdPriceChangePct, 2) : null,
+      pd_net_deposits_usd: ti?.pdNetDepositsUsd != null ? Math.round(ti.pdNetDepositsUsd) : null,
+      pd_unique_traders: ti?.pdUniqueTraders ?? null,
+      pd_swap_count: ti?.pdSwapCount ?? null,
+      pd_critical_warning: ti?.pdCriticalWarning == null ? null : ti.pdCriticalWarning ? 1 : 0,
     };
     return sim.request({ ...spec, combo }, ts);
   }

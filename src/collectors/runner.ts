@@ -12,6 +12,7 @@ import { GapTracker } from "./gaps.ts";
 import { SwapBudget, SwapStreamCollector, swapStreamEnabled } from "./swapStream.ts";
 import { TokenSecurityCollector } from "./tokenSecurity.ts";
 import { TokenFlowCollector } from "./tokenFlow.ts";
+import { PoolDiscoveryCollector } from "./poolDiscovery.ts";
 import { TokenAuditCollector } from "./tokenAudit.ts";
 import { RealLpCollector } from "./realLp.ts";
 import { AttentionCollector, MacroCollector, VenueCollector } from "./extraCollectors.ts";
@@ -248,6 +249,8 @@ export async function runCollection(app: AppContext, o: CollectOptions = {}): Pr
     if (tokenAudit) tasks.push(guard("token_audit", tokenAudit.run(signal)));
     // Friday playbook stage 2: holders + bundler % per minute
     if (cc.token_flow.enabled) tasks.push(guard("token_flow", new TokenFlowCollector({ db, log: slog, gaps, config: c, sessionId, pools: poolMap, usage, signal }).run(signal)));
+    // Meteora pool-discovery API: volatility, LP net deposits, unique traders per window (HTTP only)
+    if (cc.pool_discovery.enabled) tasks.push(guard("pool_discovery", new PoolDiscoveryCollector({ db, log: slog, config: c, sessionId, pools: poolMap, usage, signal }).run(signal)));
     // Friday playbook: fresh memecoin pools found during the session join every collector
     const fl = c.discovery.fresh_lane;
     if (fl.enabled && fl.max_added_per_session > 0) {

@@ -38,6 +38,9 @@ collectors:
   ohlcv:
     interval_seconds: 900
     refresh_lookback_minutes: 60
+  pool_discovery:
+    interval_seconds: 120             # keyless HTTP, ~150 KB per poll: 72 h at 60 s would be ~650 MB
+    max_age_seconds: 300
 gaps:
   stale_after_seconds:
     pool_state: 75

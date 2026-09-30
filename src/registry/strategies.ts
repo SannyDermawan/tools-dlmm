@@ -4,10 +4,20 @@ import YAML from "yaml";
 import { z } from "zod";
 
 /**
- * Strategy registry (roadmap PHASE 1): what each strategy is, where it comes from, how well we know
- * the original, and what it costs a small account. The data lives in registry/strategies.yaml; this
- * module validates it and checks it against the grid's entry modes.
+ * Strategy registry (roadmap PHASE 1) with the per-component decomposition of PHASE 2. The data lives
+ * in registry/strategies.yaml; this module validates it and checks it against the grid's entry modes.
+ *
+ * Every strategy is split into the same nine components so they can be compared component by
+ * component: entry, filter, side, range, position_size, exit, reentry, rebalance, transaction_policy.
+ * Each component states the original rule, our implemented rule, the deviation and the reason.
  */
+
+export const COMPONENTS = ["entry", "filter", "side", "range", "position_size", "exit", "reentry", "rebalance", "transaction_policy"] as const;
+export type ComponentName = (typeof COMPONENTS)[number];
+
+/** none: identical; minor: same logic, other value or data; major: a rule dropped, added or replaced; unknown: original silent (summaries only); n/a: nothing to compare. */
+export const DEVIATIONS = ["none", "minor", "major", "unknown", "n/a"] as const;
+export type Deviation = (typeof DEVIATIONS)[number];
 
 const text = z.string().min(1);
 const sourceSchema = z
@@ -18,9 +28,18 @@ const sourceSchema = z
   })
   .strict();
 
-const rulesSchema = z
-  .object({ entry: text, filters: text, side: text, range: text, exits: text, rebalance: text, reentry: text })
+const componentSchema = z
+  .object({
+    original: text,
+    implemented: text,
+    deviation: z.enum(DEVIATIONS),
+    reason: z.string().default(""),
+    /** where it lives in our config or code (implemented strategies) */
+    where: z.string().optional(),
+  })
   .strict();
+
+const componentsSchema = z.object(Object.fromEntries(COMPONENTS.map((c) => [c, componentSchema])) as Record<ComponentName, typeof componentSchema>).strict();
 
 const strategySchema = z
   .object({
@@ -31,9 +50,9 @@ const strategySchema = z
     entry_mode: z.string().nullable(),
     source: sourceSchema,
     fidelity: z.enum(["faithful", "interpretation", "not_implemented", "n/a"]),
-    rules: rulesSchema,
-    /** original vs implemented, one line per deviation (PHASE 2 will make this one row per component) */
-    original_vs_implemented: z.array(text).default([]),
+    components: componentsSchema,
+    /** remarks that belong to the strategy as a whole */
+    notes: z.array(text).default([]),
     transaction_profile: z.object({ churn: z.enum(["low", "medium", "high"]), notes: text }).strict(),
     capital_sensitivity: z.object({ fixed_cost_exposure: z.enum(["low", "medium", "high"]), notes: text }).strict(),
     evidence: z.array(text),
@@ -44,11 +63,7 @@ const registrySchema = z
   .object({
     universe: z.object({ version: text, frozen: z.boolean(), updated: text, note: text }).strict(),
     sources: z
-      .array(
-        z
-          .object({ id: text, url: z.string().url(), kind: text, relation: text, read: text, notes: text })
-          .strict(),
-      )
+      .array(z.object({ id: text, url: z.string().url(), kind: text, relation: text, read: text, notes: text }).strict())
       .min(1),
     strategies: z.array(strategySchema).min(1),
   })
@@ -67,8 +82,10 @@ export function loadRegistry(path = "registry/strategies.yaml", baseDir = proces
  *  - an implemented strategy names a grid entry mode, every grid entry mode has exactly one implemented strategy;
  *  - only implemented strategies carry an entry mode;
  *  - an external strategy has a source URL (unless its source is a summary: a tweet or an image), an internal one has none;
- *  - an implemented external strategy states its fidelity; a not-implemented one says not_implemented;
- *  - an implemented external strategy built from a summary says so (it cannot claim `faithful`).
+ *  - fidelity: implemented external strategies state one; not implemented ones say not_implemented; `faithful` needs
+ *    a code source and no major or unknown deviation;
+ *  - deviations: `n/a` exactly when there is nothing to compare (internal or not implemented); `unknown` only for a
+ *    summary source; minor, major and unknown carry a reason.
  */
 export function checkRegistry(r: StrategyRegistry, gridEntryModes: readonly string[]): string[] {
   const problems: string[] = [];
@@ -84,12 +101,50 @@ export function checkRegistry(r: StrategyRegistry, gridEntryModes: readonly stri
     if (s.kind === "external" && s.status === "implemented" && s.fidelity === "n/a") problems.push(`${s.id}: implemented external strategy without fidelity`);
     if (s.status !== "implemented" && s.fidelity === "faithful") problems.push(`${s.id}: fidelity faithful but not implemented`);
     if (s.fidelity === "faithful" && s.source.verified === "summary_only") problems.push(`${s.id}: cannot be faithful to a summary`);
+    const comparable = s.status === "implemented" && s.kind === "external";
+    for (const c of COMPONENTS) {
+      const x = s.components[c];
+      if (comparable && x.deviation === "n/a") problems.push(`${s.id}.${c}: implemented external strategy needs a deviation other than n/a`);
+      if (!comparable && x.deviation !== "n/a") problems.push(`${s.id}.${c}: deviation ${x.deviation} but there is nothing to compare (internal or not implemented)`);
+      if (x.deviation === "unknown" && s.source.verified !== "summary_only") problems.push(`${s.id}.${c}: unknown deviation for a source we read`);
+      if ((x.deviation === "minor" || x.deviation === "major" || x.deviation === "unknown") && !x.reason.trim()) problems.push(`${s.id}.${c}: ${x.deviation} deviation without a reason`);
+      if (s.fidelity === "faithful" && (x.deviation === "major" || x.deviation === "unknown")) problems.push(`${s.id}.${c}: faithful strategy with a ${x.deviation} deviation`);
+    }
   }
   for (const m of gridEntryModes) {
     const n = r.strategies.filter((s) => s.entry_mode === m).length;
     if (n !== 1) problems.push(`grid entry mode ${m} is registered ${n} times (expected 1)`);
   }
   return problems;
+}
+
+const SYMBOL: Record<Deviation, string> = { none: "=", minor: "~", major: "X", unknown: "?", "n/a": "-" };
+
+/** Strategy x component grid of deviations: the whole decomposition at a glance. */
+export function registryComponentGrid(r: StrategyRegistry): string {
+  const md: string[] = [];
+  md.push(`# Component deviations, universe ${r.universe.version}`);
+  md.push("");
+  md.push(`Legend: \`=\` none, \`~\` minor, \`X\` major, \`?\` unknown (original silent), \`-\` nothing to compare.`);
+  md.push("");
+  md.push(`| strategy | status | ${COMPONENTS.join(" | ")} |`);
+  md.push(`|---|---|${COMPONENTS.map(() => ":-:").join("|")}|`);
+  for (const s of r.strategies) md.push(`| ${s.id} | ${s.status} | ${COMPONENTS.map((c) => SYMBOL[s.components[c].deviation]).join(" | ")} |`);
+  return md.join("\n") + "\n";
+}
+
+/** One component across strategies: the original rule and ours side by side. */
+export function registryComponentMarkdown(r: StrategyRegistry, component: ComponentName, filter: { status?: string } = {}): string {
+  const md: string[] = [`# Component: ${component}`, ""];
+  for (const s of r.strategies.filter((x) => !filter.status || x.status === filter.status)) {
+    const c = s.components[component];
+    md.push(`## ${s.id} (${s.status}, deviation ${c.deviation})`, "");
+    md.push(`- original: ${c.original}`, `- implemented: ${c.implemented}`);
+    if (c.reason) md.push(`- reason: ${c.reason}`);
+    if (c.where) md.push(`- where: ${c.where}`);
+    md.push("");
+  }
+  return md.join("\n");
 }
 
 export function registryMarkdown(r: StrategyRegistry, filter: { status?: string; id?: string } = {}): string {
@@ -104,8 +159,12 @@ export function registryMarkdown(r: StrategyRegistry, filter: { status?: string;
   if (filter.id) {
     for (const s of rows) {
       md.push("", `## ${s.name} (${s.id})`, "");
-      for (const [k, v] of Object.entries(s.rules)) md.push(`- **${k}**: ${v}`);
-      if (s.original_vs_implemented.length) md.push("", "Original vs implemented:", ...s.original_vs_implemented.map((x) => `- ${x}`));
+      md.push("| component | deviation | original | implemented | reason |", "|---|:-:|---|---|---|");
+      for (const c of COMPONENTS) {
+        const x = s.components[c];
+        md.push(`| ${c} | ${SYMBOL[x.deviation]} ${x.deviation} | ${x.original} | ${x.implemented} | ${x.reason || "-"} |`);
+      }
+      if (s.notes.length) md.push("", "Notes:", ...s.notes.map((x) => `- ${x}`));
       md.push("", `Transaction profile: ${s.transaction_profile.notes}`, `Capital sensitivity: ${s.capital_sensitivity.notes}`);
       if (s.evidence.length) md.push("", "Evidence:", ...s.evidence.map((x) => `- ${x}`));
     }

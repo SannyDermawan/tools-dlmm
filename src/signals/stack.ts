@@ -16,6 +16,7 @@ import { RugDetector } from "../features/rugDetector.ts";
 import { SmartLpLookup } from "../features/smartLp.ts";
 import { auditLookup, type AuditRow } from "../features/safetyData.ts";
 import { binUtilization, priceChangePct, realizedVolatilityPct, volumeAuthenticity } from "../features/poolQuality.ts";
+import { hasCriticalWarning, poolDiscoveryLookup, type PoolDiscoveryRow } from "../collectors/poolDiscovery.ts";
 
 export interface DecisionStack {
   scoring: ScoringRunner;
@@ -76,6 +77,10 @@ export function buildDecisionStack(
   );
   const athLookup = new AthLookup(db);
   // smart LPs present in a pool at entry (journaled with every position; look-ahead safe, see SmartLpLookup)
+  // Meteora pool-discovery rows (volatility, LP net deposits, unique traders): journaled at entry, feed the Meridian preset
+  const pdc = c.collectors.pool_discovery;
+  const discovery = pdc.enabled ? poolDiscoveryLookup(db, pdc.max_age_seconds * 1000) : null;
+  const pdTimeframe = pdc.timeframes.includes("5m") ? "5m" : pdc.timeframes[0];
   const lpPools = [...metaOf.keys()]; // grows with pools added during a session (reloaded every 10 min)
   const smartLp = c.real_lp.enabled ? new SmartLpLookup(db, c.real_lp.smart, lpPools) : null;
   const gridSignals: GridSignals = {
@@ -98,12 +103,15 @@ export function buildDecisionStack(
       const winMs = 5 * 60_000; // fixed 5-minute window for this journaled context, independent of any preset
       const volatilityPct = tr ? realizedVolatilityPct(tr.prices, t, winMs) : null;
       const binUtil = tr ? binUtilization(tr.snap) : null;
+      const pd = discovery ? discovery(pool, pdTimeframe, t) : null;
       return {
         tokenAgeHours: born !== null && born !== undefined ? Math.max(0, (t - born) / 3_600_000) : null, mcapUsd: a?.mcap_usd ?? null,
         riskIsBase: m ? !bluechip.has(m.tokenX) : undefined,
         top10Pct: sec?.top10_pct ?? a?.top_holders_pct ?? null, holders: sec?.total_holders ?? a?.holder_count ?? null,
         organic: a?.organic_score ?? null, botHoldersPct: a?.bot_holders_pct ?? null, bundlerPct: a?.bundler_holding_pct ?? null,
         volatilityPct, priceChangePct: tr ? priceChangePct(tr.prices, t, winMs) : null, binUtilization: binUtil, tokenFeesSol: a?.fees_sol ?? null,
+        pdTimeframe: pd ? pdTimeframe : null, pdVolatility: pd?.volatility ?? null, pdPriceChangePct: pd?.price_change_pct ?? null,
+        pdNetDepositsUsd: pd?.net_deposits ?? null, pdCriticalWarning: pd ? hasCriticalWarning(pd) : null, pdUniqueTraders: pd?.unique_traders ?? null, pdSwapCount: pd?.swap_count ?? null,
         volumeAuthScore: tr
           ? volumeAuthenticity(
               { tvlUsd: tr.metrics?.tvlUsd ?? null, volume24hUsd: tr.metrics?.volume24h ?? null, fee1hUsd: tr.metrics?.fee1h ?? null, volume1hUsd: tr.metrics?.volume1h ?? null },
@@ -148,7 +156,7 @@ export function buildDecisionStack(
       const tr = scoring.scorer.trackers.get(pool);
       const m = metaOf.get(pool);
       if (!tr || !m) return null;
-      return presetInputsOf(tr, m, t, windowMinutes, c.scoring.depth_bins, sim.market.quoteUsd, bluechip, security, audit);
+      return presetInputsOf(tr, m, t, windowMinutes, c.scoring.depth_bins, sim.market.quoteUsd, bluechip, security, audit, discovery);
     },
   };
   let runnerRef: GridRunner | null = null;
@@ -185,6 +193,7 @@ export function presetInputsOf(
   bluechip: Set<string>,
   security: (token: string, t: number) => SecurityRow | null,
   audit: ((token: string, t: number) => AuditRow | null) | null = null,
+  discovery: ((pool: string, timeframe: string, t: number) => PoolDiscoveryRow | null) | null = null,
 ): PresetInputs {
   const winMs = windowMinutes * 60_000;
   const met = tr.metrics;
@@ -207,6 +216,7 @@ export function presetInputsOf(
   const au = token && audit ? audit(token, t) : null;
   const price = tr.prices.length ? tr.prices[tr.prices.length - 1].price : null;
   const tokenUsd = quoteUsd === null ? null : riskIsX ? (price === null ? null : price * quoteUsd) : quoteUsd;
+  const pd = discovery ? discovery(m.pool, `${windowMinutes}m`, t) : null;
   return {
     feeActiveTvlPct,
     tvlUsd: met?.tvlUsd ?? null,
@@ -219,8 +229,10 @@ export function presetInputsOf(
     botHoldersPct: au?.bot_holders_pct ?? null,
     bundlerPct: au?.bundler_holding_pct ?? null,
     bluechip: token === null,
-    volatilityPct: realizedVolatilityPct(tr.prices, t, winMs),
-    priceChangePct: priceChangePct(tr.prices, t, winMs),
+    // Meridian screens on the pool-discovery API's `volatility` / `pool_price_change_pct` of its timeframe
+    volatility: pd?.volatility ?? null,
+    criticalWarning: pd ? hasCriticalWarning(pd) : null,
+    priceChangePct: pd?.price_change_pct ?? null,
     tokenFeesSol: au?.fees_sol ?? null,
     binUtilization: binUtilization(snap),
   };

@@ -20,10 +20,11 @@ const presetSchema = z
         // Upstream Meridian (fciaf420/meridian, read 2026-09-30) also screens these; ours were
         // missing them. null = off (older presets keep working without setting them).
         max_volatility: optNum,       // config.js `maxVolatility`: the `volatility` field of Meteora's
-                                       // pool-discovery API (not ours, see realizedVolatilityPct)
+                                       // pool-discovery API at the fee_window timeframe (collectors.pool_discovery)
         max_price_change_pct: optNum, // config.js `maxPriceChangePct` over `fee_window`
         min_token_fees_sol: optNum,   // config.js `minTokenFeesSol`: total gas the token's traders have
                                        // paid, all-time (datapi `fees_sol`); low -> bundled/spam suspicion
+        block_critical_warnings: z.boolean(), // Meridian's discovery filter base / quote_token_has_critical_warnings=false
         min_bin_utilization: optNum,  // share of bins in [lower,upper] with supply > 0 (Mantis
                                        // MIN_BIN_UTILIZATION); low -> liquidity clumped, IL model breaks
       })
@@ -95,10 +96,11 @@ export interface PresetInputs {
   bundlerPct: number | null;
   /** true for pools whose risk side is a bluechip / stable: token filters do not apply */
   bluechip: boolean;
-  /** realized price volatility over the fee window (stddev of 1-minute log returns, %; our own measure,
-   *  not Meridian's `maxVolatility`, which is the Meteora pool-discovery API's `volatility` field) */
-  volatilityPct: number | null;
-  /** |price change| over the fee window, % */
+  /** pool-discovery API `volatility` at the fee_window timeframe (Meteora's unit); null = not collected / stale */
+  volatility: number | null;
+  /** a token of the pool has a `critical` warning in the pool-discovery API (null = not collected / stale) */
+  criticalWarning: boolean | null;
+  /** pool-discovery API `pool_price_change_pct` over the same window, % */
   priceChangePct: number | null;
   /** total gas the token's traders have paid, all-time (datapi, SOL; unverified unit) */
   tokenFeesSol: number | null;
@@ -138,7 +140,11 @@ export function evaluateMeridian(p: MeridianPreset, x: PresetInputs): PresetEval
   need("volume", x.volumeUsd, (v) => v >= pf.min_volume_usd);
   need("bin_step", x.binStep, (v) => v >= pf.min_bin_step && v <= pf.max_bin_step);
   // Optional pool-quality filters (null = off; presets before 2026-09-30 keep working unchanged).
-  if (pf.max_volatility !== null) need("volatility", x.volatilityPct, (v) => v <= pf.max_volatility!);
+  if (pf.block_critical_warnings) {
+    if (x.criticalWarning === null) failed.push("critical_warning:missing");
+    else if (x.criticalWarning) failed.push("critical_warning");
+  }
+  if (pf.max_volatility !== null) need("volatility", x.volatility, (v) => v <= pf.max_volatility!);
   if (pf.max_price_change_pct !== null) need("price_change", x.priceChangePct, (v) => Math.abs(v) <= pf.max_price_change_pct!);
   if (pf.min_token_fees_sol !== null) need("token_fees_sol", x.tokenFeesSol, (v) => v >= pf.min_token_fees_sol!);
   if (pf.min_bin_utilization !== null) need("bin_utilization", x.binUtilization, (v) => v >= pf.min_bin_utilization!);

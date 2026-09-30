@@ -356,6 +356,14 @@ export const ConfigSchema = z
           use_rugcheck: z.boolean(),
         }),
         token_flow: collector({ interval_seconds: pos, max_age_seconds: pos }),
+        pool_discovery: collector({
+          base_url: z.string().url(),
+          interval_seconds: pos,
+          timeframes: z.array(z.enum(["5m", "30m", "1h", "2h", "4h", "12h", "24h"])).min(1),
+          batch_size: z.number().int().min(1).max(100),
+          max_rps: pos,
+          max_age_seconds: pos,
+        }),
         token_audit: collector({
           interval_minutes: pos,
           pvp: z.object({ enabled: z.boolean(), min_rival_volume_24h_usd: nonneg }).strict(),
