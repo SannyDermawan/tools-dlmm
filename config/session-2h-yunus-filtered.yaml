@@ -1,0 +1,15 @@
+# 2-hour session where entry mode yunus_flip runs the filtered preset (presets/yunus_filtered.yaml): the hypothesis
+# "mcap >= $1M, token age >= 24 h, breakeven exit only". Everything else is the normal 2 h session (all other
+# modes, baseline and cooldown cells unchanged), so the same session's all_pools_baseline is the control.
+# Use: npm run dlmm -- -c config/session-2h-yunus-filtered.yaml session start -q > sesi.out 2>&1
+#
+# Tests of the hypothesis: sessions run with THIS profile and not used to form it (the 6 sessions before 2026-10-01
+# 15:00 WIB are the data that suggested it). In this profile yunus_flip is the filtered version, so compare it with
+# the earlier unfiltered sessions only through the baseline of each session (`dlmm analyze --live`, signal vs baseline).
+# To see what the filter would have done on stored data: dlmm -c config/session-2h-yunus-filtered.yaml sim replay -s <id>
+# (a replay of data the hypothesis came from: in-sample, a sanity check and not evidence).
+extends: session-2h
+session:
+  label: sesi-2jam-yunus-filter
+presets:
+  yunus: presets/yunus_filtered.yaml

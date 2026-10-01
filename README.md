@@ -65,7 +65,7 @@ swap stream falls behind and records data gaps.
 Run with `npm run dlmm -- <command>`. Use `-c path.yaml` for another config; a config file with
 `extends: default` only needs the keys it overrides.
 
-Profiles: `config/session-2h.yaml` (laptop, 2 h) and `config/session-3d.yaml` (24-72 h, reduced sampling:
+Profiles: `config/session-2h.yaml` (laptop, 2 h), `config/session-2h-yunus-filtered.yaml` (the same with the filtered yunus hypothesis of `presets/yunus_filtered.yaml`) and `config/session-3d.yaml` (24-72 h, reduced sampling:
 pool state 15 s, bin snapshots 120 s, 2 swap samples per pool and minute, real LP scans every 30 min; for a
 24 h run add `-d 1440`). Capital profiles `config/capital/usd-{40,45,50,100,1000}.yaml` are the 2 h profile with
 another position size (a profile may `extends:` another one). Entry modes: `all_pools_baseline`, `meridian_preset`,

@@ -35,6 +35,21 @@ describe("session profiles", () => {
     expect(cohorts).toBeGreaterThanOrEqual(8);
   });
 
+  it("the filtered yunus profile differs from the normal one only by its screen (mcap, token age) and by dropping time_stop", () => {
+    const n = loadConfig("config/session-2h.yaml").config;
+    const f = loadConfig("config/session-2h-yunus-filtered.yaml").config;
+    expect(f.presets.yunus).toBe("presets/yunus_filtered.yaml");
+    expect(f.grid).toEqual(n.grid);
+    expect(f.session.label).toBe("sesi-2jam-yunus-filter");
+    const pn = loadYunusPreset(n.presets.yunus);
+    const pf = loadYunusPreset(f.presets.yunus);
+    expect(pf.screen).toEqual({ ...pn.screen, min_mcap_usd: 1_000_000, min_token_age_hours: 24 });
+    expect({ ...pf, screen: pn.screen, exit: pn.exit }).toEqual(pn);
+    expect(pf.exit.policies).toHaveLength(1);
+    expect(pf.exit.policies[0].type).toBe("breakeven_exit");
+    expect(yunusCombos(pf, exitPolicyLabel).length).toBe(yunusCombos(pn, exitPolicyLabel).length / 2);
+  });
+
   it("the yunus time cap fits inside a 24 h session's tail, and every exit policy of the preset is a valid grid policy", () => {
     const p = loadYunusPreset("presets/yunus.yaml");
     const caps = yunusCombos(p, exitPolicyLabel).map((x) => (x.exit as { time_cap_minutes?: number; minutes?: number }).time_cap_minutes ?? (x.exit as { minutes?: number }).minutes ?? 0);

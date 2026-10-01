@@ -1,0 +1,51 @@
+# Yunus flip with a PRE-REGISTERED filter hypothesis (written 2026-10-01, before any holdout session ran).
+#
+# Same recipe as presets/yunus.yaml (bid-ask quote-only below the price, flip when fully in the token, no stop
+# loss); only three things differ, all taken from the first look at 6 live sessions / 77 independent entries
+# (954 positions, summary in PROGRESS.md "Yunus filter hypothesis"):
+#   1. min_mcap_usd 1_000_000   tokens below $1M: avg -10.2 % per position (the rugs / dumps); $1-10M: +2.5 %
+#   2. min_token_age_hours 24   tokens younger than a day: avg -4.3 % (many small wins, a few -40..-60 % losses)
+#   3. exit: breakeven_exit only  the plain time_stop control averaged -1.25 % against -0.16 % for breakeven
+#
+# NOT a conclusion: those numbers come from few tokens (SI, BANDIT, RESI repeat) and the data that suggested the
+# filter cannot also confirm it. It is judged on LIVE sessions that were not used to build it, against the same
+# session's all_pools_baseline: use `dlmm analyze --live --holdout N` and `dlmm scorecard` with the first session
+# run under config/session-2h-yunus-filtered.yaml as the start of the holdout. Do not change these three values after
+# looking at a holdout result; a changed filter is a new hypothesis with its own holdout.
+#
+# Everything else is as presets/yunus.yaml. A missing mcap or token age counts as failed (`mcap:no_data`), so the
+# filter is conservative: a pool we cannot measure is skipped.
+
+screen:
+  categories: [memecoin]
+  require_risk_token_base: true
+  min_tvl_usd: 10000
+  min_mcap_usd: 1000000          # hypothesis (yunus.yaml: null)
+  min_token_age_hours: 24        # hypothesis (yunus.yaml: null)
+  max_token_age_hours: null
+  min_ath_drawdown_pct: null
+  max_ath_drawdown_pct: null
+  fail_on_mint_authority: true
+  fail_on_freeze_authority: true
+  missing_security: skip
+
+entry:
+  shape: bidask
+  range_pct: [50, 70]
+  anchor: [price, ath]
+  min_downside_pct: 10
+
+flip:
+  up_pct: 100
+  max_flips: 2
+  shapes:
+    - { name: bidask, shape: bidask }
+    - { name: mix_70_30, shape: bidask, blend: { strategy: spot, share: 0.3 } }
+
+exit:
+  policies:
+    - { type: breakeven_exit, min_underwater_pct: 5, target_pct: 0, time_cap_minutes: 1440 }   # hypothesis: time_stop dropped
+
+reentry:
+  cooldown_minutes: 30
+  max_cycles_per_pool: 2
