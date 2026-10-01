@@ -663,6 +663,7 @@ program
   .option("--pick <rule>", "first | random | score when several positions open together")
   .option("--seed <n>", "seed for --pick random", (v) => parseInt(v, 10))
   .option("--all", "include positions with a data gap")
+  .option("--no-reprice", "keep the stored result at the simulator's position size (default: re-price the fixed costs to the trade size)")
   .option("--days <n>", "show only the last N days of the calendar", (v) => parseInt(v, 10))
   .option("-o, --out <dir>", "write the markdown and the trade CSV here", "reports/portfolio")
   .action(async (opts) => {
@@ -687,7 +688,7 @@ program
       startCapitalUsd: opts.capital ?? c.start_capital_usd, sizeFraction: opts.fraction ?? c.size_fraction,
       maxTradeUsd: opts.maxTrade === undefined ? c.max_trade_usd : opts.maxTrade > 0 ? opts.maxTrade : null,
       dailyStopPct: opts.dailyStop ?? c.daily_stop_pct, tz: opts.tz ?? c.tz, pick: opts.pick ?? c.pick, seed: opts.seed ?? 1,
-      windowSeconds: c.window_seconds, cleanOnly: !opts.all,
+      windowSeconds: c.window_seconds, cleanOnly: !opts.all, reprice: opts.reprice,
     });
     const md = portfolioMarkdown(r, { calendarDays: opts.days });
     console.log(`sessions: ${ids.map((i) => i.slice(0, 8)).join(", ")}\n\n${md}`);

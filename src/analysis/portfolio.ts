@@ -1,4 +1,5 @@
 import type { Db } from "../db/index.ts";
+import { costClass } from "./scorecard.ts";
 
 /**
  * Sequential portfolio simulation (stage 4): the grid opens hundreds of virtual positions at once,
@@ -34,6 +35,13 @@ export interface PortfolioOptions {
   windowSeconds: number;
   /** only positions without a data gap */
   cleanOnly: boolean;
+  /**
+   * Re-price each trade to its size: the stored result is at the simulator's position size (usually $1000), where the
+   * fixed costs (transaction fees, bin-array creation) are a tiny share. At a $45 trade the same dollars weigh 20x
+   * more; the variable costs (swaps, token tax, composition fee) stay proportional. Same model as the scorecard's
+   * capital projection.
+   */
+  reprice?: boolean;
 }
 
 export const DEFAULT_PORTFOLIO: Omit<PortfolioOptions, "sessionIds" | "mode"> = {
@@ -47,6 +55,10 @@ export interface Candidate {
   closedAt: number;
   pct: number; // net PnL % of capital, costs included
   score: number | null;
+  /** the stored position size, its fixed (non-refundable) costs and the refundable rent it locks, in USD */
+  capUsd?: number;
+  fixedUsd?: number;
+  rentUsd?: number;
 }
 
 export interface TakenTrade {
@@ -58,6 +70,8 @@ export interface TakenTrade {
   pct: number;
   pnlUsd: number;
   equityAfter: number;
+  /** refundable position rent locked while the trade is open (the wallet must hold it besides the trade size) */
+  rentUsd?: number;
 }
 
 export interface DayRow {
@@ -91,15 +105,19 @@ export interface PortfolioResult {
   dailySharpe: number | null;
   /** average number of candidates per opportunity: > 1 means the pick rule matters */
   candidatesPerOpportunity: number | null;
+  /** refundable rent locked by the taken trades (only with `reprice`): average and largest, USD */
+  avgRentUsd: number | null;
+  maxRentUsd: number | null;
 }
 
 const KEY_RE = /^[a-z_][a-z0-9_]*$/;
 
 /** Positions of the chosen mode / combination: closed, with a result, in time order. */
-export function loadCandidates(db: Db, o: Pick<PortfolioOptions, "sessionIds" | "mode" | "where" | "cleanOnly">): Candidate[] {
+export function loadCandidates(db: Db, o: Pick<PortfolioOptions, "sessionIds" | "mode" | "where" | "cleanOnly" | "reprice">): Candidate[] {
   if (!o.sessionIds.length) return [];
   const params: (string | number)[] = [...o.sessionIds, o.mode];
-  let sql = `SELECT p.position_id id, p.pool, p.opened_at, p.closed_at, r.net_pnl_pct pct, json_extract(p.grid_combo, '$.signal_score') score
+  let sql = `SELECT p.position_id id, p.pool, p.opened_at, p.closed_at, r.net_pnl_pct pct, json_extract(p.grid_combo, '$.signal_score') score,
+            p.capital_usd cap, r.detail
      FROM sim_positions p JOIN sim_results r USING(position_id)
      WHERE p.session_id IN (${o.sessionIds.map(() => "?").join(",")}) AND p.entry_mode = ? AND p.status = 'closed'
        AND p.opened_at IS NOT NULL AND p.closed_at IS NOT NULL AND r.net_pnl_pct IS NOT NULL`;
@@ -112,8 +130,27 @@ export function loadCandidates(db: Db, o: Pick<PortfolioOptions, "sessionIds" | 
   }
   sql += " ORDER BY p.opened_at, p.position_id";
   return db
-    .all<{ id: string; pool: string; opened_at: number; closed_at: number; pct: number; score: number | null }>(sql, ...params)
-    .map((r) => ({ id: r.id, pool: r.pool, openedAt: r.opened_at, closedAt: r.closed_at, pct: r.pct, score: r.score }));
+    .all<{ id: string; pool: string; opened_at: number; closed_at: number; pct: number; score: number | null; cap: number; detail: string | null }>(sql, ...params)
+    .map((r) => {
+      const c: Candidate = { id: r.id, pool: r.pool, openedAt: r.opened_at, closedAt: r.closed_at, pct: r.pct, score: r.score };
+      if (!o.reprice || !(r.cap > 0)) return c;
+      let fixed = 0;
+      let rent = 0;
+      try {
+        for (const x of (JSON.parse(r.detail ?? "{}").costs ?? []) as { type: string; usd: number; refundable: boolean }[]) {
+          if (x.type === "position_rent") {
+            if (x.refundable) rent = Math.max(rent, x.usd); // a rebalance re-locks the same rent
+            continue;
+          }
+          if (x.refundable) continue;
+          const k = costClass(x.type);
+          if (k === "tx" || k === "bin_array") fixed += x.usd;
+        }
+      } catch {
+        return c; // old rows without a detail stay as stored
+      }
+      return { ...c, capUsd: r.cap, fixedUsd: fixed, rentUsd: rent };
+    });
 }
 
 const mulberry = (seed: number) => {
@@ -183,13 +220,14 @@ export function simulatePortfolio(cands: Candidate[], o: PortfolioOptions): Port
       : group[0];
     skipped.notPicked += group.length - 1;
     const size = Math.min(equity, equity * o.sizeFraction, o.maxTradeUsd ?? Infinity);
-    const pnl = (size * pick.pct) / 100;
+    const pct = o.reprice && pick.capUsd && pick.fixedUsd !== undefined && size > 0 ? pick.pct + (pick.fixedUsd / pick.capUsd - pick.fixedUsd / size) * 100 : pick.pct;
+    const pnl = (size * pct) / 100;
     // a trade that closes on a later day belongs to that day's calendar and stop
     rollover(dayKey(pick.closedAt, o.tz));
     equity += pnl;
     dayRealized += pnl;
     freeAt = pick.closedAt;
-    taken.push({ id: pick.id, pool: pick.pool, openedAt: pick.openedAt, closedAt: pick.closedAt, sizeUsd: size, pct: pick.pct, pnlUsd: pnl, equityAfter: equity });
+    taken.push({ id: pick.id, pool: pick.pool, openedAt: pick.openedAt, closedAt: pick.closedAt, sizeUsd: size, pct, pnlUsd: pnl, equityAfter: equity, rentUsd: pick.rentUsd });
     const r = row(curDay!);
     r.trades++;
     r.pnlUsd += pnl;
@@ -220,6 +258,7 @@ export function simulatePortfolio(cands: Candidate[], o: PortfolioOptions): Port
     streak = t.pnlUsd < 0 ? streak + 1 : 0;
     longest = Math.max(longest, streak);
   }
+  const rents = taken.map((t) => t.rentUsd).filter((x): x is number => x !== undefined);
   const dr = days.map((d) => d.returnPct);
   const mean = dr.length ? dr.reduce((a, b) => a + b, 0) / dr.length : null;
   const sd = dr.length > 1 && mean !== null ? Math.sqrt(dr.reduce((s, x) => s + (x - mean) ** 2, 0) / (dr.length - 1)) : null;
@@ -240,6 +279,8 @@ export function simulatePortfolio(cands: Candidate[], o: PortfolioOptions): Port
     bestDay: days.length ? days.reduce((a, b) => (b.returnPct > a.returnPct ? b : a)) : null,
     dailySharpe: mean !== null && sd && sd > 0 ? (mean / sd) * Math.sqrt(365) : null,
     candidatesPerOpportunity: opportunities ? inGroups / opportunities : null,
+    avgRentUsd: rents.length ? rents.reduce((a, b) => a + b, 0) / rents.length : null,
+    maxRentUsd: rents.length ? Math.max(...rents) : null,
   };
 }
 
@@ -270,7 +311,9 @@ export function portfolioMarkdown(r: PortfolioResult, opts: { calendarDays?: num
     out.push("", "| day | trades | PnL | day return | equity | note |", "|---|--:|--:|--:|--:|---|");
     for (const d of shown) out.push(`| ${d.day} | ${d.trades} | ${usd(d.pnlUsd)} | ${f(d.returnPct, 2, "%")} | ${usd(d.equityEnd)} | ${d.stopped ? "daily stop hit" : ""} |`);
   }
-  out.push("", "Trade results are the stored net PnL % (costs included) at the simulator's trade size; a bigger compounded size would pay a larger price impact than is shown here (use `--max-trade`). A short history is not a calendar: judge by many days.");
+  if (o.reprice)
+    out.push("", `Re-priced to the trade size: fixed costs (transaction fees, bin-array creation) are charged in dollars at the size of each trade, variable ones (swaps, token tax, composition fee) stay proportional.${r.avgRentUsd !== null ? ` Refundable position rent locked while a trade is open: ${usd(r.avgRentUsd)} on average, up to ${usd(r.maxRentUsd!)}; the wallet must hold it besides the trade size.` : ""}`);
+  out.push("", "Trade results are the stored net PnL % (costs included)" + (o.reprice ? ", re-priced as above" : " at the simulator's trade size") + "; a bigger compounded size would pay a larger price impact than is shown here (use `--max-trade`). A short history is not a calendar: judge by many days.");
   return out.join("\n");
 }
 

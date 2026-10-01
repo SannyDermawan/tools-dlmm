@@ -123,6 +123,31 @@ describe("candidates from the journal", () => {
     expect(loadCandidates(db, { sessionIds: ["S"], mode: "friday_scalp", cleanOnly: true })[0].score).toBe(70);
     expect(() => loadCandidates(db, { sessionIds: ["S"], mode: "x", where: [{ key: "a; DROP TABLE x", op: "=", value: "1" }], cleanOnly: true })).toThrow(/bad filter key/);
   });
+  it("re-prices the fixed costs to the trade size: the same dollars weigh more on $45 than on $1000", () => {
+    const { db } = setup();
+    const costs = [
+      { type: "tx_open", usd: 0.2, refundable: false }, { type: "tx_close", usd: 0.2, refundable: false }, { type: "bin_array_init", usd: 0.1, refundable: false },
+      { type: "position_rent", usd: 30, refundable: true }, { type: "balancing_swap", usd: 5, refundable: false },
+    ];
+    db.insert("sim_positions", {
+      position_id: "r1", session_id: "S", pool: "P", grid_combo: "{}", entry_mode: "yunus_flip", strategy: "bidask", sides: "quote_only", bins_below: 1, bins_above: 0,
+      capital_usd: 1000, requested_at: 0, opened_at: D0, closed_at: D0 + MIN, gap_tainted: 0, config_version: db.get<{ config_version: string }>("SELECT config_version FROM sessions")!.config_version, status: "closed",
+    });
+    db.insert("sim_results", { position_id: "r1", net_pnl_pct: 2, net_pnl_usd: 20, detail: JSON.stringify({ costs }) });
+    const base = { sessionIds: ["S"], mode: "yunus_flip", cleanOnly: true };
+    expect(loadCandidates(db, base)[0]).not.toHaveProperty("fixedUsd"); // untouched unless asked
+    const c = loadCandidates(db, { ...base, reprice: true })[0];
+    expect(c).toMatchObject({ capUsd: 1000, rentUsd: 30 });
+    expect(c.fixedUsd).toBeCloseTo(0.5, 9); // transaction fees + bin array; the swap is variable, the rent refundable
+    const run = (reprice: boolean) => simulatePortfolio([c], opts({ startCapitalUsd: 45, maxTradeUsd: 45, reprice }));
+    expect(run(false).taken[0].pct).toBe(2);
+    // 2 % at $1000 had 0.05 % fixed cost; at $45 the same 0.5 $ is 1.11 %: net 2 + 0.05 - 1.111 = 0.939 %
+    expect(run(true).taken[0].pct).toBeCloseTo(2 + 0.05 - (0.5 / 45) * 100, 9);
+    expect(run(true).taken[0].rentUsd).toBe(30);
+    expect(run(true).maxRentUsd).toBe(30);
+    expect(portfolioMarkdown(run(true))).toContain("Re-priced to the trade size");
+    expect(portfolioMarkdown(run(true))).toContain("$30.00 on average");
+  });
   it("session report section lists only modes with enough sequential trades", () => {
     const { db, add } = setup();
     const c = loadConfig().config.portfolio;

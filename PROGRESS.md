@@ -949,6 +949,18 @@ Tests: `test/inKindSwap.test.ts` (5: tokens kept at the open, scaling in the -81
 bound over sides x exit_to x price moves x rebalance, exit swap); three existing tests now assert value + in-kind
 cost instead of the old identity. 405 tests pass.
 
+## `dlmm portfolio` at the account's own size (2026-10-01)
+
+The stored results are at the simulator's $1000 position, where the fixed costs (transaction fees, bin-array creation)
+are about 0.04 % and at $45 about 0.9 %. `dlmm portfolio` now re-prices each trade to its size (default; `--no-reprice`
+keeps the stored result): fixed costs in dollars at the trade's size, variable ones (swaps, token tax, composition fee)
+proportional, and it reports the refundable position rent that is locked while a trade is open (the wallet needs it besides
+the trade size). Example, one position at a time, $45, sessions 8-11: yunus bid-ask 50 % from the price with the
+breakeven exit: 4 trades, $45 -> $46.16 (+2.6 %, +3.5 % without re-pricing), rent locked $22.66 on average and up to
+$63.80. The same recipe with the `time_stop` exit: 0 of 4 won, -1.5 %. friday_scalp (scalp exits): 18 trades, 17 % win,
+$45 -> $29.26. These are replays of stored sessions with very few trades: a feel for the account, not evidence.
+Test: `test/portfolio.test.ts`.
+
 ## Dashboard: biggest profit and loss per preset (2026-10-01)
 
 Besides the average, the running-PnL view (terminal and web) now lists for every entry mode the single biggest profit
