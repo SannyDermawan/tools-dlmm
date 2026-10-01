@@ -949,6 +949,19 @@ Tests: `test/inKindSwap.test.ts` (5: tokens kept at the open, scaling in the -81
 bound over sides x exit_to x price moves x rebalance, exit swap); three existing tests now assert value + in-kind
 cost instead of the old identity. 405 tests pass.
 
+## `dlmm accounts`: preset accounts of $45 (2026-10-01)
+
+Each of the 7 presets (all entry modes but the baseline control) as its own account of $45 with one position in one pool
+at a time, so a session reads as up to 7 accounts with a pool open each instead of a preset spreading hundreds of
+positions over many tokens. It is `dlmm portfolio` (one at a time, compounding, fixed costs priced at $45) with a fixed
+profile per preset (`src/analysis/accounts.ts`): meridian and royalmand their own recipe, friday the scalp, yunus bid-ask
+50 % from the price with the breakeven exit, signal_enter / signal_watch the strategy the signal itself recommends
+(`matches_recommendation`, best score first), evil_panda only in sessions of 12 h or more. It reads the positions the
+grid stored, so the live session costs nothing extra (a 2 h session on a weak laptop is unchanged). First run, sessions
+8-11: $315 -> $279.73 over the 7 accounts (yunus +2.6 %, meridian +1.5 %, royalmand -2.2 %, friday -35 % with 18 trades,
+signal_enter -20.5 %, signal_watch -24.8 %, evil_panda no trade), at most 6 accounts open at once in 5 pools. Rent locked
+while a position is open is up to $63.80 (yunus), so a real wallet needs more than the $45. Test: `test/accounts.test.ts`.
+
 ## `dlmm portfolio` at the account's own size (2026-10-01)
 
 The stored results are at the simulator's $1000 position, where the fixed costs (transaction fees, bin-array creation)

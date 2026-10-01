@@ -700,6 +700,34 @@ program
     app.db.close();
   });
 
+program
+  .command("accounts")
+  .description("preset accounts: every entry mode as its own small account (default $45) with one position in one pool at a time, over live sessions")
+  .option("-s, --session <id...>", "simulation session(s); default: the last live sessions (finalized interrupted ones count)")
+  .option("--last <n>", "the last N live sessions", (v) => parseInt(v, 10), 4)
+  .option("--capital <usd>", "account size in USD", parseFloat, 45)
+  .option("--no-reprice", "keep the stored result at the simulator's position size (default: re-price the fixed costs to the account's size)")
+  .option("-o, --out <dir>", "write the markdown and the trade CSV here", "reports/accounts")
+  .action(async (opts) => {
+    const app = createApp(cfgPath());
+    const { pickSessions } = await import("./report/crossSession.ts");
+    const { runAccounts, accountsMarkdown, accountsCsv } = await import("./analysis/accounts.ts");
+    const { mkdirSync, writeFileSync } = await import("node:fs");
+    const picked = pickSessions(app.db, opts.session ? { ids: opts.session, live: true } : { live: true, last: opts.last });
+    if (!picked.length) throw new Error("no live session with closed positions");
+    const ids = picked.map((p) => p.session_id);
+    const c = app.lc.config.portfolio;
+    const rs = runAccounts(app.db, ids, { capitalUsd: opts.capital, reprice: opts.reprice, windowSeconds: c.window_seconds, tz: c.tz });
+    const md = accountsMarkdown(rs, { capitalUsd: opts.capital, sessions: ids, reprice: opts.reprice });
+    console.log(md);
+    mkdirSync(opts.out, { recursive: true });
+    const stem = `accounts-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}`;
+    writeFileSync(`${opts.out}/${stem}.md`, `${md}\n`);
+    writeFileSync(`${opts.out}/${stem}.csv`, accountsCsv(rs));
+    console.log(`\nwritten: ${opts.out}/${stem}.md, .csv`);
+    app.db.close();
+  });
+
 const tgCmd = program.command("telegram").description("read-only Telegram notifications and commands (phase 12)");
 const tgSetup = async () => {
   const app = createApp(cfgPath());

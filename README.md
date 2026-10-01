@@ -58,6 +58,7 @@ swap stream falls behind and records data gaps.
 | `dlmm lp outcomes [-p POOL...] [--since-hours H]` | real positions that opened while we watched, followed to closure: time to close (Kaplan-Meier) and PnL by width / shape / sides / hold time, censoring-aware |
 | `dlmm registry [--status S] [--id ID] [--components] [--component NAME] [--check]` | strategy registry and its decomposition into nine components (entry, filter, side, range, position_size, exit, reentry, rebalance, transaction_policy): one strategy in full, the deviation grid, one component across strategies; `--check` verifies it against `grid.entry_modes` |
 | `dlmm rugs [--lead MIN]` | rug post-mortem: token features before each detected rug and which entry screens (market cap band, holders, bots, bundlers, authorities, age) would have caught it |
+| `dlmm accounts [-s SESSION...] [--last N] [--capital 45]` | every preset (except the baseline control) as its own small account with one position in one pool at a time, over the last live sessions; equity, trades, rent locked, pools open together |
 | `dlmm portfolio -m MODE [-s SESSION...] [-w key=value...]` | sequential account over the stored positions of one entry mode (one at a time, compounding, daily stop) |
 | `dlmm telegram run\|test\|whoami` | read-only Telegram notifier + commands (token and ids in `.env`) |
 | `dlmm llm status\|test` | conditional LLM layer: activation, budget, recent calls, one manual call |
