@@ -1,7 +1,7 @@
 # Yunus (@0xyunss) / EvilPanda flip playbook, as entry mode yunus_flip.
 #
 # Source: public summaries of the playbooks (tweets, unverified). NOT the code: the Meridian fork's own policy
-# (fork_panda, which its code calls `evil_panda`: single-sided SOL Spot 80 % below, Supertrend / volume / mcap
+# (royalmand, which its code calls `evil_panda`: single-sided SOL Spot 80 % below, Supertrend / volume / mcap
 # entry gate, RSI(2) exit, no flip) is a different thing, and so is @EvilPanda's wide two-sided bid-ask
 # (entry mode evil_panda); the closest public code for the flip is hummingbot's lp_rebalancer.
 # See registry/strategies.yaml. What we simulate:

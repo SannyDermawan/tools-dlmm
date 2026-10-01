@@ -19,12 +19,12 @@ describe("strategy registry (roadmap PHASE 1)", () => {
     const ids = reg.sources.map((s) => s.id);
     expect(ids).toEqual(expect.arrayContaining(["yunus-0x/meridian", "fciaf420/meridian", "irfndi/prism-liquidity-agent", "DeltaLogicLabs/Mantis", "hummingbot/hummingbot"]));
     expect(reg.sources.find((s) => s.id === "fciaf420/meridian")!.relation).toContain("fork");
-    // the fork's own `evil_panda` policy (fork_panda) exists only in the fork; it is neither yunus_flip nor the
+    // the fork's own `evil_panda` policy (royalmand) exists only in the fork; it is neither yunus_flip nor the
     // @EvilPanda playbook (evil_panda, a summary): three entry modes
-    const ep = reg.strategies.find((s) => s.id === "fork_panda")!;
+    const ep = reg.strategies.find((s) => s.id === "royalmand")!;
     expect(ep.source.url).toContain("fciaf420/meridian");
-    expect(ep).toMatchObject({ status: "implemented", entry_mode: "fork_panda" });
-    expect(reg.strategies.find((s) => s.id === "yunus_flip")!.notes.join(" ")).toMatch(/NOT the Meridian fork's policy \(fork_panda\)/);
+    expect(ep).toMatchObject({ status: "implemented", entry_mode: "royalmand" });
+    expect(reg.strategies.find((s) => s.id === "yunus_flip")!.notes.join(" ")).toMatch(/NOT the Meridian fork's policy \(royalmand\)/);
     const real = reg.strategies.find((s) => s.id === "evil_panda")!;
     expect(real).toMatchObject({ status: "implemented", entry_mode: "evil_panda", source: { verified: "summary_only", url: null } });
     expect(real.source.name).toContain("Grok");
@@ -138,12 +138,12 @@ describe("strategy decomposition (roadmap PHASE 2)", () => {
     expect(dev("yunus_flip", "position_size")).toBe("unknown");
     // Meridian's source was read, so nothing there is unknown
     for (const c of COMPONENTS) expect(dev("meridian_preset", c)).not.toBe("unknown");
-    // fork_panda: side, range and rebalance as in the fork's code; sizing and re-entry are ours
-    expect(dev("fork_panda", "side")).toBe("none");
-    expect(dev("fork_panda", "range")).toBe("none");
-    expect(dev("fork_panda", "position_size")).toBe("major");
-    expect(dev("fork_panda", "reentry")).toBe("major");
-    for (const c of COMPONENTS) expect(dev("fork_panda", c)).not.toBe("unknown");
+    // royalmand: side, range and rebalance as in the fork's code; sizing and re-entry are ours
+    expect(dev("royalmand", "side")).toBe("none");
+    expect(dev("royalmand", "range")).toBe("none");
+    expect(dev("royalmand", "position_size")).toBe("major");
+    expect(dev("royalmand", "reentry")).toBe("major");
+    for (const c of COMPONENTS) expect(dev("royalmand", c)).not.toBe("unknown");
     // the @EvilPanda playbook is a summary: what it does not say is `unknown`, what it says is compared
     expect(dev("evil_panda", "side")).toBe("none");
     expect(dev("evil_panda", "filter")).toBe("major");
@@ -197,13 +197,13 @@ describe("strategy decomposition (roadmap PHASE 2)", () => {
   it("one component across strategies shows original and implemented side by side, filtered by status", () => {
     const md = registryComponentMarkdown(reg, "exit");
     expect(md).toContain("## prism_fallen_angel (candidate, deviation n/a)");
-    expect(md).toContain("## fork_panda (implemented, deviation minor)");
+    expect(md).toContain("## royalmand (implemented, deviation minor)");
     expect(md).toContain("## evil_panda (implemented, deviation minor)");
     expect(md).toContain("RSI(2) > 90");
     expect(md).toContain("## meridian_preset (implemented, deviation minor)");
     const only = registryComponentMarkdown(reg, "exit", { status: "implemented" });
     expect(only).not.toContain("## prism_fallen_angel");
-    expect(only).toContain("## fork_panda");
+    expect(only).toContain("## royalmand");
     expect(only).toContain("## friday_scalp");
   });
 
@@ -212,7 +212,7 @@ describe("strategy decomposition (roadmap PHASE 2)", () => {
     for (const s of reg.strategies) expect(all).toContain(`| ${s.id} |`);
     const cand = registryMarkdown(reg, { status: "candidate" });
     expect(cand).toContain("| prism_fallen_angel |");
-    expect(cand).not.toContain("| fork_panda |");
+    expect(cand).not.toContain("| royalmand |");
     expect(cand).not.toContain("| all_pools_baseline |");
     const one = registryMarkdown(reg, { id: "yunus_flip" });
     expect(one).toContain("| component | deviation | original | implemented | reason |");

@@ -41,13 +41,13 @@ const presetSchema = z
   })
   .strict();
 
-export type ForkPandaPreset = z.infer<typeof presetSchema>;
+export type RoyalmandPreset = z.infer<typeof presetSchema>;
 
-export function loadForkPandaPreset(path: string, baseDir = process.cwd()): ForkPandaPreset {
+export function loadRoyalmandPreset(path: string, baseDir = process.cwd()): RoyalmandPreset {
   return presetSchema.parse(YAML.parse(readFileSync(resolve(baseDir, path), "utf8")));
 }
 
-export interface ForkPandaInputs {
+export interface RoyalmandInputs {
   volume24hUsd: number | null;
   mcapUsd: number | null;
   riskIsBase: boolean | null;
@@ -60,7 +60,7 @@ export interface ForkPandaInputs {
 }
 
 /** The entry screen: failed checks (empty = pass); `:no_data` when an input was missing and missing_data is skip. */
-export function evaluateForkPanda(pr: ForkPandaPreset, x: ForkPandaInputs): string[] {
+export function evaluateRoyalmand(pr: RoyalmandPreset, x: RoyalmandInputs): string[] {
   const s = pr.screen;
   const failed: string[] = [];
   const need = (name: string, v: number | null, ok: (v: number) => boolean) => {
@@ -92,7 +92,7 @@ export function evaluateForkPanda(pr: ForkPandaPreset, x: ForkPandaInputs): stri
  * The fork's exit confluence on complete candles: RSI(n) > rsi_above AND (the close above the
  * upper Bollinger band OR the MACD histogram turned green on the last bar). Null = not enough candles.
  */
-export function forkPandaExitSignal(pr: ForkPandaPreset, cs: Candle[]): { fire: boolean; rsi: number | null; aboveBand: boolean; macdTurnedGreen: boolean } | null {
+export function royalmandExitSignal(pr: RoyalmandPreset, cs: Candle[]): { fire: boolean; rsi: number | null; aboveBand: boolean; macdTurnedGreen: boolean } | null {
   const e = pr.exit;
   const closes = cs.map((c) => c.c);
   if (closes.length < Math.max(e.bb_period, e.macd.slow + e.macd.signal, e.rsi_period + 1) + 1) return null;
@@ -109,18 +109,18 @@ export function forkPandaExitSignal(pr: ForkPandaPreset, cs: Candle[]): { fire: 
 const BARS = 80; // enough for MACD(12, 26, 9), Bollinger(20), RSI and the Supertrend warm-up
 
 /**
- * fork_panda: the policy the Meridian fork calls `evil_panda` in its code (the fork author's own, not
+ * royalmand: the policy the Meridian fork calls `evil_panda` in its code (the fork author's own, not
  * the @EvilPanda playbook, which is entry mode evil_panda): single-sided SOL Spot 80 % below the price in a pool
  * whose token passes the screen; exits on the indicator confluence while in profit, plus Meridian's
  * exit policy. One position at a time per pool; a new one cooldown_minutes after the close.
  */
-export function forkPandaModule(pr: ForkPandaPreset, meridian: MeridianPreset | null, env: ModuleEnv): StrategyModule {
+export function royalmandModule(pr: RoyalmandPreset, meridian: MeridianPreset | null, env: ModuleEnv): StrategyModule {
   const meridianExit: ScalarExitPolicy = pr.exit.meridian_exits && meridian ? meridianExitPolicy(meridian) : { type: "hold_to_session_end" };
   const win = meridian ? feeWindowMinutes(meridian) : 0;
   return {
-    id: "fork_panda",
-    entryMode: "fork_panda",
-    statsKey: "forkPanda",
+    id: "royalmand",
+    entryMode: "royalmand",
+    statsKey: "royalmand",
     planKeys: () => ["main"],
     evaluateReentry(prev: PreviousCycle | null, ts: number, trigger: EntryTrigger) {
       if (!prev) return { ok: trigger !== "reentry", reentry: false };
@@ -142,7 +142,7 @@ export function forkPandaModule(pr: ForkPandaPreset, meridian: MeridianPreset | 
           meridianFailed = ev.pass ? [] : ev.failed;
         }
       }
-      const failed = evaluateForkPanda(pr, {
+      const failed = evaluateRoyalmand(pr, {
         volume24hUsd: ti.volume24hUsd ?? null, mcapUsd: ti.mcapUsd, riskIsBase: ti.riskIsBase ?? null, tokenFeesSol: ti.tokenFeesSol ?? null,
         top10Pct: ti.top10Pct ?? null, supertrendCandles: env.signals.candles?.(pool, ts, pr.screen.supertrend.timeframe, BARS) ?? [], meridianFailed,
       });
@@ -154,7 +154,7 @@ export function forkPandaModule(pr: ForkPandaPreset, meridian: MeridianPreset | 
         strategy: pr.range.shape, sides: "quote_only", binsBelow: bins, binsAbove: 0, exitPolicy: meridianExit,
         combo: {
           strategy: pr.range.shape, bins_per_side: bins, sides: "quote_only", range_pct: pr.range.downside_pct,
-          exit_policy: `fork_panda_confluence+${exitPolicyLabel(meridianExit)}`, variant: "none", cycle_no: ctx.n, reentry: ctx.hasPrevious, at_cohort: ctx.trigger !== "reentry",
+          exit_policy: `royalmand_confluence+${exitPolicyLabel(meridianExit)}`, variant: "none", cycle_no: ctx.n, reentry: ctx.hasPrevious, at_cohort: ctx.trigger !== "reentry",
           base_fee_pct: baseFeePct(sim.meta), collect_fee_mode: sim.meta.collectFeeMode,
         },
       };
@@ -162,10 +162,10 @@ export function forkPandaModule(pr: ForkPandaPreset, meridian: MeridianPreset | 
     evaluateExit(x: ExitContext): string | null {
       if (pr.exit.require_profit && x.netPct <= 0) return null;
       const cs = env.signals.candles?.(x.sim.meta.pool, x.ts, pr.exit.timeframe, BARS) ?? [];
-      const sig = forkPandaExitSignal(pr, cs);
+      const sig = royalmandExitSignal(pr, cs);
       if (!sig?.fire) return null;
-      x.sim.logExitSignal(x.p.id, x.ts, { action: "KELUAR", reason: "fork_panda_confluence", rsi: sig.rsi, aboveBand: sig.aboveBand, macdTurnedGreen: sig.macdTurnedGreen, pnlPct: x.netPct });
-      return "fork_panda_confluence";
+      x.sim.logExitSignal(x.p.id, x.ts, { action: "KELUAR", reason: "royalmand_confluence", rsi: sig.rsi, aboveBand: sig.aboveBand, macdTurnedGreen: sig.macdTurnedGreen, pnlPct: x.netPct });
+      return "royalmand_confluence";
     },
     estimateTransactions: (plan) => estimateCycleTransactions(env.c, plan),
   };

@@ -16,7 +16,7 @@ import type { EntryTrigger, EntryVerdict, ModeStats, PreviousCycle, ReentryVerdi
 import { meridianModule } from "../strategies/meridian.ts";
 import { flowDetail, fridayModule } from "../strategies/friday.ts";
 import { yunusModule } from "../strategies/yunus.ts";
-import { forkPandaModule, loadForkPandaPreset, type ForkPandaPreset } from "../strategies/forkPanda.ts";
+import { royalmandModule, loadRoyalmandPreset, type RoyalmandPreset } from "../strategies/royalmand.ts";
 import { evilPandaModule, loadEvilPandaPreset, type EvilPandaPreset } from "../strategies/evilPanda.ts";
 import type { Candle } from "../features/indicators.ts";
 import type { Regime } from "../features/regime.ts";
@@ -72,9 +72,9 @@ export class SessionClock {
 export { exitPolicyLabel };
 
 /** Entry modes that need the decision stack (signals / preset inputs) — skipped without it. */
-const SIGNAL_MODES = new Set(["signal_enter", "signal_watch", "meridian_preset", "friday_scalp", "yunus_flip", "fork_panda", "evil_panda"]);
+const SIGNAL_MODES = new Set(["signal_enter", "signal_watch", "meridian_preset", "friday_scalp", "yunus_flip", "royalmand", "evil_panda"]);
 /** Entry modes that open their own fixed preset position instead of the grid combinations. */
-const PRESET_MODES = new Set(["meridian_preset", "friday_scalp", "yunus_flip", "fork_panda", "evil_panda"]);
+const PRESET_MODES = new Set(["meridian_preset", "friday_scalp", "yunus_flip", "royalmand", "evil_panda"]);
 /** Entry modes that run with and without the pool cooldown (grid.cooldown_enabled). */
 const COOLDOWN_MODES = new Set(["signal_enter", "signal_watch"]);
 
@@ -200,8 +200,8 @@ export interface GridStats {
   friday: { evaluated: number; opened: number; reentries: number; failed: Record<string, number> };
   /** Yunus flip entries: combinations screened, cycles opened (first + re-entries), flips done, cycles completed, screen failures */
   yunus: { evaluated: number; opened: number; reentries: number; flips: number; cycles: number; failed: Record<string, number> };
-  /** fork_panda entries (Meridian fork): pools screened, positions opened (first + re-entries), screen failures */
-  forkPanda: { evaluated: number; opened: number; reentries: number; failed: Record<string, number> };
+  /** royalmand entries (Meridian fork): pools screened, positions opened (first + re-entries), screen failures */
+  royalmand: { evaluated: number; opened: number; reentries: number; failed: Record<string, number> };
   /** Evil Panda entries (@EvilPanda playbook): pools screened, positions opened (first + re-entries), screen failures */
   evilPanda: { evaluated: number; opened: number; reentries: number; failed: Record<string, number> };
   /** signal-mode positions not opened because the pool was in cooldown (phase 10) */
@@ -257,11 +257,11 @@ export interface GridSignals {
   friday?: FridayPreset;
   /** preset override (tests); default: loaded from config presets.yunus */
   yunus?: YunusPreset;
-  /** preset override (tests); default: loaded from config presets.fork_panda */
-  forkPanda?: ForkPandaPreset;
+  /** preset override (tests); default: loaded from config presets.royalmand */
+  royalmand?: RoyalmandPreset;
   /** preset override (tests); default: loaded from config presets.evil_panda */
   evilPanda?: EvilPandaPreset;
-  /** the last `bars` complete candles of a pool at t (look-ahead safe; fork_panda's Supertrend and exit indicators) */
+  /** the last `bars` complete candles of a pool at t (look-ahead safe; royalmand's Supertrend and exit indicators) */
   candles?: (pool: string, t: number, timeframe: string, bars: number) => Candle[];
 }
 
@@ -309,7 +309,7 @@ export class GridRunner {
   readonly friday: FridayPreset | null = null;
   readonly yunus: YunusPreset | null = null;
   readonly yunusCombos: YunusCombo[] = [];
-  readonly forkPanda: ForkPandaPreset | null = null;
+  readonly royalmand: RoyalmandPreset | null = null;
   readonly evilPanda: EvilPandaPreset | null = null;
   /** preset entry modes as standard strategy modules (roadmap PHASE 3), run by openModule in this order */
   readonly modules: StrategyModule[] = [];
@@ -319,7 +319,7 @@ export class GridRunner {
   readonly stats: GridStats = {
     cohorts: 0, requested: 0, skippedPools: 0, rebalances: 0, policyExits: 0, rebalanceNotWorth: 0, signalEntries: {}, pnlExits: {},
     variantActions: { partial_harvest: 0, fee_compounding: 0, single_sided_reseed: 0 },
-    preset: { evaluated: 0, passed: 0, opened: 0, partial: 0, failed: {} }, friday: { evaluated: 0, opened: 0, reentries: 0, failed: {} }, yunus: { evaluated: 0, opened: 0, reentries: 0, flips: 0, cycles: 0, failed: {} }, forkPanda: { evaluated: 0, opened: 0, reentries: 0, failed: {} }, evilPanda: { evaluated: 0, opened: 0, reentries: 0, failed: {} }, cooldownSkips: 0, filterSkips: {}, deferredEntries: 0, widthSkips: 0, events: { detected: 0, opened: 0, skipped: {} }, capped: false,
+    preset: { evaluated: 0, passed: 0, opened: 0, partial: 0, failed: {} }, friday: { evaluated: 0, opened: 0, reentries: 0, failed: {} }, yunus: { evaluated: 0, opened: 0, reentries: 0, flips: 0, cycles: 0, failed: {} }, royalmand: { evaluated: 0, opened: 0, reentries: 0, failed: {} }, evilPanda: { evaluated: 0, opened: 0, reentries: 0, failed: {} }, cooldownSkips: 0, filterSkips: {}, deferredEntries: 0, widthSkips: 0, events: { detected: 0, opened: 0, skipped: {} }, capped: false,
   };
   /** latest signal action per pool at the previous scoring round (rising-edge detection) */
   private readonly lastAction = new Map<string, string | null>();
@@ -360,11 +360,11 @@ export class GridRunner {
         log?.error({ err: (e as Error).message, path: c.presets.yunus }, "yunus preset not loaded; entry mode skipped");
       }
     }
-    if (signals && c.grid.entry_modes.includes("fork_panda")) {
+    if (signals && c.grid.entry_modes.includes("royalmand")) {
       try {
-        this.forkPanda = signals.forkPanda ?? loadForkPandaPreset(c.presets.fork_panda);
+        this.royalmand = signals.royalmand ?? loadRoyalmandPreset(c.presets.royalmand);
       } catch (e) {
-        log?.error({ err: (e as Error).message, path: c.presets.fork_panda }, "fork_panda preset not loaded; entry mode skipped");
+        log?.error({ err: (e as Error).message, path: c.presets.royalmand }, "royalmand preset not loaded; entry mode skipped");
       }
     }
     if (signals && c.grid.entry_modes.includes("evil_panda")) {
@@ -383,17 +383,17 @@ export class GridRunner {
         this.yunusCombos = y.combos;
         if (y.combos.length) this.modules.push(y);
       }
-      if (this.forkPanda) {
+      if (this.royalmand) {
         // the Meridian screen and exits of the fork: the loaded Meridian preset, or the file when that mode is off
         let mer = this.preset;
-        if (!mer && this.forkPanda.screen.meridian_screen) {
+        if (!mer && this.royalmand.screen.meridian_screen) {
           try {
             mer = signals.preset ?? loadMeridianPreset(c.presets.meridian);
           } catch {
             mer = null;
           }
         }
-        this.modules.push(forkPandaModule(this.forkPanda, mer, env));
+        this.modules.push(royalmandModule(this.royalmand, mer, env));
       }
       if (this.evilPanda) this.modules.push(evilPandaModule(this.evilPanda, env));
       for (const m of this.modules) this.moduleByMode.set(m.entryMode, m);

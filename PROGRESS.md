@@ -850,7 +850,7 @@ combos, not a blocklist failure. Only ~2 independent market days so far.
 price moved -0.2% and LPs stayed. Its blocklist entries (token `Xsc9qvGR...`, dev `S7vYFFWH...`) were soft-removed; the
 session `8691ab49` vetoed its signals because of that entry. 381 tests pass.
 
-## Roadmap PHASE 3, 5, 6, 7, 8, 13, fork_panda and evil_panda (2026-10-01) ✅
+## Roadmap PHASE 3, 5, 6, 7, 8, 13, royalmand and evil_panda (2026-10-01) ✅
 
 Built on a separate worktree while a live session ran, then merged.
 
@@ -889,7 +889,7 @@ earlier tests pass unchanged, including the per-mode stats. Each module position
 
 **Three different things were called "Evil Panda"; they are now three entry modes** (correction of the same day: the
 first version of this section took the fork's `evil_panda` for the @EvilPanda playbook, which it is not):
-- `fork_panda` (`presets/fork_panda.yaml`, `src/strategies/forkPanda.ts`): what the Meridian fork `fciaf420/meridian`
+- `royalmand` (`presets/royalmand.yaml`, `src/strategies/royalmand.ts`): what the Meridian fork `fciaf420/meridian`
   calls `evil_panda` in its code (`config.js`, `prompt.js`, verified against the files on 2026-10-01). It is that fork
   author's own policy, not the playbook of the X account: token 24 h volume >= $750k and market cap >= $200k (Jupiter
   audit), green 5 min Supertrend (our OHLCV), the Meridian screen, token fees >= 30 SOL, top-10 <= 60 %; single-sided
@@ -904,7 +904,7 @@ first version of this section took the fork's `evil_panda` for the @EvilPanda pl
   after 60 min (max 2). It holds for days, so it stays out of sessions shorter than 12 h (`session_too_short`): run it
   in `config/session-3d.yaml` (`-d 1440`). The tight-range + bot version has no rules in the summary: not implemented.
 - `yunus_flip`: the Yunus flip from tweet summaries (unchanged).
-Registry: `fork_panda` implemented, fidelity interpretation (sizing and re-entry major, entry / filter / exit /
+Registry: `royalmand` implemented, fidelity interpretation (sizing and re-entry major, entry / filter / exit /
 transactions minor, side / range / rebalance none); `evil_panda` implemented from a summary (side none, filter major,
 range / exit minor, entry / position size / re-entry / transactions unknown because the summary is silent).
 
@@ -948,6 +948,24 @@ PnL diff before costs -0.19 pp, after costs -0.35 pp): the realism replay has no
 Tests: `test/inKindSwap.test.ts` (5: tokens kept at the open, scaling in the -81 % rug, cost split = `cost_usd`, loss
 bound over sides x exit_to x price moves x rebalance, exit swap); three existing tests now assert value + in-kind
 cost instead of the old identity. 405 tests pass.
+
+## Interrupted sessions: `dlmm sim finalize` (2026-10-01) ✅
+
+Session `27e4aa83` ran 85 of 120 minutes: the connection dropped and the session was ended at about 09:42 WIB, so it
+became `aborted` with 6507 of 9670 positions never closed (the simulator's position state lives in memory, only the
+specs and some events reach the database). Counting only its 3163 closed positions would lean toward quick exits, and
+the 2 h of collected data would have been wasted. `dlmm sim finalize -s <id> [-c the profile the session used]`
+replays the stored data of an aborted live session **with the session's own timing** (cohorts at +15 / +45 / +75 min,
+not squeezed into the shorter span) and closes what is still open at the end of the data as `session_aborted`. The
+replay stops just before the earliest data gap that was still open when the session died (those gaps only mark the
+interruption: the first attempt closed 6419 positions "inside" them and tainted them, 66 % of the session; now 32 of
+9698). The result is a `sim_replay` session labelled `finalized:<label>` that keeps the original's start time, notes
+`finalizes: <id>`, and counts as that live session: `analyze --live`, `scorecard` and holdouts take it in its place and
+leave the raw aborted session out (`pickSessions`: aborted sessions nobody finalized are left out unless
+`includeAborted`; a finalization that did not complete, e.g. superseded, counts for nothing). `27e4aa83` is session 9
+of the live set (`c726a45b`, 9698 positions, 14 % win, -3.08 % average net on clean ones). Caveats: it is a replay of
+the stored data under today's code (swap costs paid in kind, `royalmand` mode added: 3 positions), cohort 3 only had
+about 10 minutes, and 150 of its realism checks were skipped because of data gaps in their window.
 
 ## RPC: Helius Free + swap stream redesign (2026-09-29)
 - `.env` points to Helius (Free: 1M credits/month, 10 rps). Rate limits: critical 3 rps +

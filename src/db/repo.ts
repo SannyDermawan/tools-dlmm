@@ -22,13 +22,13 @@ export type SessionKind = "collect" | "sim_replay" | "session" | "score_replay";
 
 export function createSession(
   db: Db,
-  p: { kind: SessionKind; configVersion: string; label?: string; notes?: string; sourceSessionId?: string },
+  p: { kind: SessionKind; configVersion: string; label?: string; notes?: string; sourceSessionId?: string; startAt?: number },
 ): string {
   const id = randomUUID();
   db.insert("sessions", {
     session_id: id,
     kind: p.kind,
-    start_at: Date.now(),
+    start_at: p.startAt ?? Date.now(),
     label: p.label ?? null,
     config_version: p.configVersion,
     status: "running",

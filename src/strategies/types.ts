@@ -6,7 +6,7 @@ import type { GridSignals } from "../sim/gridRunner.ts";
 
 /**
  * Standard strategy interface (strategy-lab roadmap PHASE 3). Every preset entry mode (Meridian,
- * Friday, Yunus, fork_panda, Evil Panda) is a StrategyModule; GridRunner runs them all through one loop and
+ * Friday, Yunus, royalmand, Evil Panda) is a StrategyModule; GridRunner runs them all through one loop and
  * knows nothing about their rules. The components map onto the PHASE 2 decomposition:
  *
  *   evaluateReentry      -> re-entry (and "one position at a time")
@@ -106,7 +106,7 @@ export interface StrategyModule {
   readonly id: string;
   readonly entryMode: string;
   /** key of GridRunner.stats for this mode */
-  readonly statsKey: "preset" | "friday" | "yunus" | "forkPanda" | "evilPanda";
+  readonly statsKey: "preset" | "friday" | "yunus" | "royalmand" | "evilPanda";
   /** open only the N best-scoring passing pools per cohort (Meridian's ranking); undefined = every passing pool */
   readonly rankTopN?: number;
   /** independent plans per pool (Yunus: one per grid combination); each keeps its own cycles */

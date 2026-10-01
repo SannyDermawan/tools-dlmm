@@ -1,4 +1,4 @@
-# fork_panda (entry mode fork_panda): the strategy the Meridian fork fciaf420/meridian calls `evil_panda`
+# royalmand (entry mode royalmand): the strategy the Meridian fork fciaf420/meridian calls `evil_panda`
 # in its code (prompt.js, tools/dlmm.js, config.js `evilPanda` block). It is that fork author's own policy
 # (GMGN token volume + Supertrend + RSI(2) exit) and NOT the playbook of @EvilPanda (token age >= 48 h,
 # wide two-sided bid-ask, held for days): that one runs as entry mode evil_panda (presets/evil_panda.yaml).

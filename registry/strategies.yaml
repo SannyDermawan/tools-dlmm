@@ -38,7 +38,7 @@ sources:
     kind: fork of yunus-0x/meridian (488 commits ahead, 189 behind at reading time)
     relation: fork of yunus-0x/meridian
     read: "2026-09-30 source code"
-    notes: "Adds a policy it names evil_panda (prompt.js, tools/dlmm.js, config.js; here: fork_panda), GMGN screening, autoresearch, Telegram UI. The name is the fork author's: it does not implement the @EvilPanda playbook."
+    notes: "Adds a policy it names evil_panda (prompt.js, tools/dlmm.js, config.js; here: royalmand), GMGN screening, autoresearch, Telegram UI. The name is the fork author's: it does not implement the @EvilPanda playbook."
   - id: irfndi/prism-liquidity-agent
     url: https://github.com/irfndi/prism-liquidity-agent
     kind: live rule-based agent (TypeScript, Bun), optional agent overlay
@@ -250,7 +250,7 @@ strategies:
       rebalance: { original: "Flip when fully converted to the token.", implemented: "The same, up to 2 flips per position.", deviation: none, where: "src/sim/gridRunner.ts tryFlip" }
       transaction_policy: { original: "Not stated.", implemented: "Our cost model: open, flips and close; no balancing swap after the first deposit.", deviation: unknown, reason: "No stated policy." }
     notes:
-      - "Built from summaries, not code. It is NOT the Meridian fork's policy (fork_panda): there is no flip in that code. Nor is it the wide two-sided playbook of evil_panda (a separate summary)."
+      - "Built from summaries, not code. It is NOT the Meridian fork's policy (royalmand): there is no flip in that code. Nor is it the wide two-sided playbook of evil_panda (a separate summary)."
       - "The closest public code for the flip is hummingbot's lp_rebalancer (BUY = quote-only below the price, SELL = base-only above, re-open on the other side after an auto-close), whose documented default size is $50."
       - "Meridian's upstream strategy library also has single_sided_reseed (token-only bid-ask, re-open lower without swapping), which our variant single_sided_reseed models."
     transaction_profile: { churn: low, notes: "A cycle can last hours; transactions are open, flips and close; no balancing swap after the first deposit." }
@@ -261,11 +261,11 @@ strategies:
       - "382 positions in 2 sessions, +3.4 pp vs baseline, better in 4 of 4 cohorts with entries; but 376 of them opened in the first cohort of each session (188 each), so it is about two samples, and cycles rarely complete within 2 h (censored)."
 
   # ================================================================= external, candidates and references (not in the grid)
-  - id: fork_panda
-    name: Meridian fork's own `evil_panda` policy (fork author's, not the @EvilPanda playbook)
+  - id: royalmand
+    name: royalmand (the Meridian fork's own `evil_panda` policy, not the @EvilPanda playbook)
     kind: external
     status: implemented
-    entry_mode: fork_panda
+    entry_mode: royalmand
     source: { name: "fciaf420/meridian prompt.js, tools/dlmm.js, config.js (the `evilPanda` block; the fork's own policy)", url: "https://github.com/fciaf420/meridian", verified: source_code }
     fidelity: interpretation
     components:
@@ -279,7 +279,7 @@ strategies:
       rebalance: { original: "None specified.", implemented: "None.", deviation: none }
       transaction_policy: { original: "Meridian's: priority fee Medium, an 80 % range needs several transactions at bin step 100.", implemented: "Our cost model: priority fee percentile, an 80 % range at bin step 100 is about 161 bins = 3 transactions per open and close.", deviation: minor, reason: "Our priority-fee model, not Meridian's Medium setting." }
     notes:
-      - "Runs as entry mode fork_panda through the standard strategy interface (src/strategies, roadmap PHASE 3); its exit is the first module-specific evaluateExit."
+      - "Runs as entry mode royalmand through the standard strategy interface (src/strategies, roadmap PHASE 3); its exit is the first module-specific evaluateExit."
       - "The fork's code names this policy `evil_panda`. It is the fork author's own (GMGN volume + Supertrend + RSI(2) exit), nothing in it is the @EvilPanda playbook (token age >= 48 h, wide two-sided bid-ask held for days), which is the strategy evil_panda below. Whether the fork borrowed the name from him is not known."
       - "The author's own claim in the prompt (spot without a SOL split -10.75 %, with split +7.48 % at 73 % wins) comes from his lessons file, unverified."
     transaction_profile: { churn: low, notes: "One position at a time per pool; exit only on the indicator confluence while in profit." }
@@ -306,7 +306,7 @@ strategies:
     notes:
       - "Source is a summary only: every number it does not give is ours (see presets/evil_panda.yaml). The aggressive tight-range + bot version (+170 % in 18 min) has no rules in the summary and is not implemented."
       - "It holds for days, so it only runs in sessions of at least 12 h (config/session-3d.yaml, `-d 1440`); in a 2 h session the module stays out (`session_too_short`)."
-      - "Not the fork's own `evil_panda` policy (that is fork_panda) and not yunus_flip."
+      - "Not the fork's own `evil_panda` policy (that is royalmand) and not yunus_flip."
     transaction_profile: { churn: low, notes: "Two to three operations per position and days between them; the open and the close each need several transactions for a range this wide." }
     capital_sensitivity: { fixed_cost_exposure: low, notes: "Few operations, but the author calls it capital inefficient (idle quote on the lower side), the idle share is the cost for a small account." }
     evidence: []

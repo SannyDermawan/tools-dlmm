@@ -20,6 +20,15 @@ export interface ReplayRunOptions {
   signals?: boolean;
   /** virtual position size override (roadmap PHASE 7: the same data at another capital) */
   capitalUsd?: number;
+  /**
+   * Finalize an interrupted live session (`dlmm sim finalize`): the replay stands in for it. It keeps the
+   * source's start time and label, closes what is still open at the end of the data as `session_aborted`
+   * (neutral for pool memory) and notes `finalizes` so analytics count it as that live session. The data
+   * ends where the collectors went dark: gaps still open when the session died (closed by the recovery at
+   * the next start) are not data gaps of the run, they only mark the interruption, so the replay stops just
+   * before the earliest of them instead of closing its positions inside a "gap".
+   */
+  finalizes?: boolean;
 }
 
 export interface ReplayRunResult {
@@ -90,8 +99,9 @@ export function runReplay(app: AppContext, o: ReplayRunOptions): ReplayRunResult
   const clock = new SessionClock(from, timing);
   const sessionId = createSession(db, {
     kind: "sim_replay", configVersion: app.configVersion, sourceSessionId: src.session_id,
-    label: `replay:${src.label ?? ""}${o.capitalUsd !== undefined ? `:usd${o.capitalUsd}` : ""}`,
-    notes: JSON.stringify({ fee_attribution: cfg.simulation.fee_attribution, timing, capital_usd: cfg.simulation.virtual_capital_usd }),
+    label: o.finalizes ? `finalized:${src.label ?? ""}` : `replay:${src.label ?? ""}${o.capitalUsd !== undefined ? `:usd${o.capitalUsd}` : ""}`,
+    startAt: o.finalizes ? src.start_at : undefined,
+    notes: JSON.stringify({ fee_attribution: cfg.simulation.fee_attribution, timing, capital_usd: cfg.simulation.virtual_capital_usd, ...(o.finalizes ? { finalizes: src.session_id } : {}) }),
   });
   const sink = new DbSimSink(db, sessionId, app.configVersion);
   const feeOf = transferFeeLookup(db);
@@ -115,18 +125,25 @@ export function runReplay(app: AppContext, o: ReplayRunOptions): ReplayRunResult
     sessionId: src.session_id,
   });
   const stable = new Set(cfg.categories.usd_stable_tokens);
+  let stopAt: number | null = null;
+  if (o.finalizes && src.end_at !== null) {
+    const tail = db.get<{ t: number | null }>(
+      "SELECT MIN(start_at) t FROM data_gaps WHERE session_id = ? AND end_at >= ?", src.session_id, src.end_at - 5_000,
+    )?.t;
+    if (tail != null) stopAt = tail - 1;
+  }
   let lastTs = from;
   // batch mode: commit every ~250 ms so live sessions sharing the database are never blocked
   db.beginBatch();
   try {
     for (const e of events) {
-      if (e.ts > clock.end) break;
+      if (e.ts > clock.end || (stopAt !== null && e.ts > stopAt)) break;
       lastTs = e.ts;
       stack?.scoring.feed(e); // scores (-> signals -> exit engine) every decision time before e
       dispatch(e, sims, runner, cfg, stable);
       db.yieldBatch();
     }
-    runner.finish(Math.min(clock.end, lastTs), "session_end");
+    runner.finish(Math.min(clock.end, lastTs), o.finalizes ? "session_aborted" : "session_end");
     sink.flush();
   } finally {
     db.endBatch();
@@ -140,7 +157,9 @@ export function runReplay(app: AppContext, o: ReplayRunOptions): ReplayRunResult
     }
   finishSession(db, sessionId, "completed", {
     poolCount: metas.length,
-    notes: JSON.stringify({ fee_attribution: cfg.simulation.fee_attribution, timing, capital_usd: cfg.simulation.virtual_capital_usd, grid: runner.stats, signals: stack?.book.count ?? 0, exitEngine: stack?.exitEngine.stats ?? null }),
+    notes: JSON.stringify({ fee_attribution: cfg.simulation.fee_attribution, timing, capital_usd: cfg.simulation.virtual_capital_usd, ...(o.finalizes ? { finalizes: src.session_id, data_end: lastTs } : {}), grid: runner.stats, signals: stack?.book.count ?? 0, exitEngine: stack?.exitEngine.stats ?? null }),
   });
+  if (o.finalizes)
+    db.run("UPDATE sessions SET notes = COALESCE(notes || '; ', '') || ? WHERE session_id = ?", `finalized by replay ${sessionId} (data until ${new Date(lastTs).toISOString()})`, src.session_id);
   return { sessionId, positions, closed, failed, timing, grid: runner.stats, signals: stack?.book.count ?? 0, exitEngine: stack?.exitEngine.stats ?? null };
 }

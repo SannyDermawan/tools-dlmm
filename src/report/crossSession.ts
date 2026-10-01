@@ -10,20 +10,46 @@ export interface SessionPick {
   label: string | null;
   start_at: number;
   positions: number;
+  status?: string;
+  /** the interrupted live session this replay stands in for (`dlmm sim finalize`) */
+  finalizes?: string | null;
 }
 
-/** Simulation sessions (live or replay) with closed positions, oldest first. */
-export function pickSessions(db: Db, o: { ids?: string[]; last?: number; label?: string; live?: boolean }): SessionPick[] {
-  const rows = db.all<SessionPick>(
-    `SELECT s.session_id, s.kind, s.label, s.start_at, COUNT(p.position_id) positions
+/**
+ * Simulation sessions (live or replay) with closed positions, oldest first. An interrupted live
+ * session (status aborted) is not counted as it is: most of its positions never closed, so the
+ * closed ones lean toward quick exits. `dlmm sim finalize` replays its stored data with the same
+ * timing and closes what is still open at the end of the data; that replay counts as the live
+ * session (also with `live`) and replaces it (only a completed finalization does). Aborted sessions
+ * nobody finalized are left out unless `includeAborted`.
+ */
+export function pickSessions(db: Db, o: { ids?: string[]; last?: number; label?: string; live?: boolean; includeAborted?: boolean }): SessionPick[] {
+  const rows = db.all<SessionPick & { notes: string | null }>(
+    `SELECT s.session_id, s.kind, s.label, s.start_at, s.status, s.notes, COUNT(p.position_id) positions
      FROM sessions s JOIN sim_positions p ON p.session_id = s.session_id
      WHERE s.kind IN ('session', 'sim_replay') AND p.status = 'closed'
      GROUP BY s.session_id ORDER BY s.start_at`,
   );
-  let out = rows;
+  const finalizes = (n: string | null): string | null => {
+    try {
+      const v = (JSON.parse(n ?? "null") as { finalizes?: string } | null)?.finalizes;
+      return typeof v === "string" ? v : null;
+    } catch {
+      return null; // notes are free text in old sessions
+    }
+  };
+  const done = new Set<string>();
+  for (const r of rows) {
+    r.finalizes = r.kind === "sim_replay" && r.status === "completed" ? finalizes(r.notes) : null;
+    if (r.finalizes) done.add(r.finalizes);
+  }
+  let out: SessionPick[] = rows.map(({ notes: _n, ...r }) => r);
+  // a finalization that did not complete (superseded or failed) is not evidence of anything
+  out = out.filter((r) => r.kind !== "sim_replay" || r.finalizes || r.status === "completed");
+  out = out.filter((r) => r.kind !== "session" || r.status !== "aborted" || (o.includeAborted && !done.has(r.session_id)));
   if (o.ids?.length) out = out.filter((r) => o.ids!.some((id) => r.session_id.startsWith(id)));
   if (o.label) out = out.filter((r) => (r.label ?? "").includes(o.label!));
-  if (o.live) out = out.filter((r) => r.kind === "session"); // replays of the same data are not independent evidence
+  if (o.live) out = out.filter((r) => r.kind === "session" || !!r.finalizes); // replays of the same data are not independent evidence
   if (o.last) out = out.slice(-o.last);
   return out;
 }

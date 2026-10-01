@@ -43,6 +43,7 @@ swap stream falls behind and records data gaps.
 | `dlmm dashboard [--web] [-s SESSION]` | real-time status (terminal, or local web page on 127.0.0.1:8787) |
 | `dlmm session stop [-s SESSION]` | stop a running session cleanly from another terminal |
 | `dlmm export -s SESSION [--all] [-f csv\|jsonl]` | export tables for Python / DuckDB |
+| `dlmm sim finalize -s ID` | make an interrupted (aborted) live session usable: replay its stored data with the session's timing, close what is still open at the end of the data; analytics then count the replay as that session (run with the `-c` profile the session used) |
 | `dlmm analyze [--last N] [--holdout K] [--live]` | cross-session analytics (signal vs baseline, calibration, consistency); `--live` leaves replays out |
 | `dlmm scorecard [-s ID...] [--last N] [--mode M...] [--capitals 40,45,...] [--holdout N] [--replays]` | strategy scorecard per entry mode: sample, performance, fixed vs variable cost, capital efficiency, rug exposure, regime, projection to other capitals (roadmap PHASE 5-8, 13) |
 | `dlmm capital -s SESSION [--capitals 40,45,50,100,1000] [--no-replay]` | replay a session at several position sizes and compare net, break-even and fixed cost (roadmap PHASE 7) |
@@ -68,8 +69,8 @@ Profiles: `config/session-2h.yaml` (laptop, 2 h) and `config/session-3d.yaml` (2
 pool state 15 s, bin snapshots 120 s, 2 swap samples per pool and minute, real LP scans every 30 min; for a
 24 h run add `-d 1440`). Capital profiles `config/capital/usd-{40,45,50,100,1000}.yaml` are the 2 h profile with
 another position size (a profile may `extends:` another one). Entry modes: `all_pools_baseline`, `meridian_preset`,
-`friday_scalp`, `yunus_flip` (Yunus flip cycle from tweet summaries, `presets/yunus.yaml`), `fork_panda` (the policy
-the Meridian fork calls `evil_panda`, from its source, `presets/fork_panda.yaml`), `evil_panda` (@EvilPanda's wide
+`friday_scalp`, `yunus_flip` (Yunus flip cycle from tweet summaries, `presets/yunus.yaml`), `royalmand` (the policy
+the Meridian fork calls `evil_panda`, from its source, `presets/royalmand.yaml`), `evil_panda` (@EvilPanda's wide
 two-sided bid-ask held for days, from a summary, `presets/evil_panda.yaml`; only in sessions of 12 h or more),
 `signal_enter`, `signal_watch`. The preset modes are strategy modules with one interface (`src/strategies/`).
 

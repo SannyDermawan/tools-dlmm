@@ -226,6 +226,35 @@ report: ${rp.markdown}`);
   });
 
 sim
+  .command("finalize")
+  .description("make an interrupted live session usable: replay its stored data with the session's timing and close what is still open at the end of the data (run with the -c profile the session used)")
+  .requiredOption("-s, --session <id>", "aborted live session (prefix)")
+  .action(async (opts) => {
+    const app = createApp(cfgPath());
+    const { runReplay } = await import("./sim/replayRunner.ts");
+    const { timingFromConfig } = await import("./sim/gridRunner.ts");
+    const { printSimSummary } = await import("./report/simSummary.ts");
+    const src = app.db.get<{ session_id: string; kind: string; status: string; label: string | null }>(
+      "SELECT session_id, kind, status, label FROM sessions WHERE session_id LIKE ? AND kind = 'session'", `${opts.session}%`,
+    );
+    if (!src) throw new Error(`no live session ${opts.session}`);
+    if (src.status !== "aborted") throw new Error(`session ${src.session_id.slice(0, 8)} is ${src.status}: only an aborted (interrupted) session is finalized`);
+    const done = app.db.get<{ session_id: string }>(
+      "SELECT session_id FROM sessions WHERE kind = 'sim_replay' AND status = 'completed' AND source_session_id = ? AND notes LIKE '%\"finalizes\"%'", src.session_id,
+    );
+    if (done) throw new Error(`already finalized by ${done.session_id}`);
+    const t0 = Date.now();
+    // the configured timing as the live run had it (a replay would otherwise squeeze it into the shorter span)
+    const r = runReplay(app, { sourceSessionId: src.session_id, timing: timingFromConfig(app.lc.config), finalizes: true });
+    console.log(`finalized in ${((Date.now() - t0) / 1000).toFixed(1)} s  timing=${JSON.stringify(r.timing)}`);
+    console.log(`grid=${JSON.stringify(r.grid)}  signals=${r.signals}`);
+    printSimSummary(app.db, r.sessionId);
+    const { writeSessionReport } = await import("./report/sessionReport.ts");
+    console.log(`report: ${writeSessionReport(app.db, r.sessionId).markdown}`);
+    app.db.close();
+  });
+
+sim
   .command("retaint")
   .description("re-evaluate the gap taint of a simulation session with the current rule (simulation.gap_taint)")
   .requiredOption("-s, --session <id>", "simulation session")
@@ -624,7 +653,7 @@ program
   .description("sequential account over stored positions: one at a time, compounding, daily stop (Friday-style calendar and drawdown)")
   .option("-s, --session <id...>", "simulation session(s); several are chained by time")
   .option("--last <n>", "the last N finished live sessions", (v) => parseInt(v, 10))
-  .requiredOption("-m, --mode <mode>", "entry mode: friday_scalp, yunus_flip, fork_panda, evil_panda, meridian_preset, signal_enter, signal_watch, all_pools_baseline")
+  .requiredOption("-m, --mode <mode>", "entry mode: friday_scalp, yunus_flip, royalmand, evil_panda, meridian_preset, signal_enter, signal_watch, all_pools_baseline")
   .option("-w, --where <filter...>", "grid_combo filters: key=value or key~prefix, e.g. exit_policy~scalp bins_per_side=34 strategy=spot")
   .option("--capital <usd>", "starting capital", parseFloat)
   .option("--fraction <f>", "share of the equity per trade (1 = all, compounding)", parseFloat)
