@@ -43,7 +43,9 @@ swap stream falls behind and records data gaps.
 | `dlmm dashboard [--web] [-s SESSION]` | real-time status (terminal, or local web page on 127.0.0.1:8787) |
 | `dlmm session stop [-s SESSION]` | stop a running session cleanly from another terminal |
 | `dlmm export -s SESSION [--all] [-f csv\|jsonl]` | export tables for Python / DuckDB |
-| `dlmm analyze [--last N] [--holdout K]` | cross-session analytics (signal vs baseline, calibration, consistency) |
+| `dlmm analyze [--last N] [--holdout K] [--live]` | cross-session analytics (signal vs baseline, calibration, consistency); `--live` leaves replays out |
+| `dlmm scorecard [-s ID...] [--last N] [--mode M...] [--capitals 40,45,...] [--holdout N] [--replays]` | strategy scorecard per entry mode: sample, performance, fixed vs variable cost, capital efficiency, rug exposure, regime, projection to other capitals (roadmap PHASE 5-8, 13) |
+| `dlmm capital -s SESSION [--capitals 40,45,50,100,1000] [--no-replay]` | replay a session at several position sizes and compare net, break-even and fixed cost (roadmap PHASE 7) |
 | `dlmm macro import [-f FILE]` | load scheduled macro events (FOMC, CPI) used as a time filter |
 | `dlmm calibrate [--write] [--force]` | fit module weights, walk-forward + holdout, new config_version only when proven |
 | `dlmm report [-s SESSION]` | (re)write `reports/<session>/report.md`, `positions.csv`, `by_dimension.csv` |
@@ -64,8 +66,11 @@ Run with `npm run dlmm -- <command>`. Use `-c path.yaml` for another config; a c
 
 Profiles: `config/session-2h.yaml` (laptop, 2 h) and `config/session-3d.yaml` (24-72 h, reduced sampling:
 pool state 15 s, bin snapshots 120 s, 2 swap samples per pool and minute, real LP scans every 30 min; for a
-24 h run add `-d 1440`). Entry modes: `all_pools_baseline`, `meridian_preset`, `friday_scalp`, `yunus_flip`
-(Yunus / EvilPanda flip cycle, `presets/yunus.yaml`), `signal_enter`, `signal_watch`.
+24 h run add `-d 1440`). Capital profiles `config/capital/usd-{40,45,50,100,1000}.yaml` are the 2 h profile with
+another position size (a profile may `extends:` another one). Entry modes: `all_pools_baseline`, `meridian_preset`,
+`friday_scalp`, `yunus_flip` (Yunus flip cycle from tweet summaries, `presets/yunus.yaml`), `evil_panda` (the
+Meridian fork's Evil Panda from its source, `presets/evil_panda.yaml`), `signal_enter`, `signal_watch`. The preset
+modes are strategy modules with one interface (`src/strategies/`).
 
 ## Layout
 

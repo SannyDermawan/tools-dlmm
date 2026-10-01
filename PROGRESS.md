@@ -850,6 +850,58 @@ combos, not a blocklist failure. Only ~2 independent market days so far.
 price moved -0.2% and LPs stayed. Its blocklist entries (token `Xsc9qvGR...`, dev `S7vYFFWH...`) were soft-removed; the
 session `8691ab49` vetoed its signals because of that entry. 381 tests pass.
 
+## Roadmap PHASE 3, 5, 6, 7, 8, 13 and Evil Panda (2026-10-01) ✅
+
+Built on a separate worktree while a live session ran, then merged.
+
+**PHASE 5 / 7 / 8: scorecard, capital profiles, capital efficiency.** `dlmm scorecard [-s ...] [--last N] [--mode ...]
+[--capitals 40,45,50,100,1000] [--holdout N]` (default: live sessions only, replays are not independent evidence) gives
+per entry mode: sample (sessions, pools, positions), net / median / gross %, win and loss rate, profit factor, average
+and median trade, drawdown; the cost split into **fixed** (transaction fees + bin-array creation: the same dollars at
+any size) and **variable** (swaps incl. price impact and the exit swap, token tax, composition fee), transaction
+operations, the refundable position rent locked while open; **capital efficiency** as net % per hour in a position
+(also with the locked rent added to the capital), fee % per hour; rug exposure (positions open when the rug detector
+flagged their token); the result by market regime; and the same positions **projected to other capitals**
+(net%(C) = gross% - variable% - fixed$ / C). The session report has the same section. Capital profiles
+`config/capital/usd-{40,45,50,100,1000}.yaml` extend the 2 h profile (config `extends:` now chains) and change only
+the position size; `dlmm capital -s <session>` replays that session at each size (exact, the fee share per dollar
+included) next to the projection. First reading over three sessions: fixed cost is ~0.04 % of a $1000 position and
+~0.9 % of a $45 one (baseline break-even 1.85 % -> 2.70 %); the **position rent (~$7-26) is 15-40 % of a $45 position**:
+refunded, but the wallet must hold it. Known simulator bias, not changed: a big balancing swap is charged in dollars at
+the open and not scaled by the later price move, so a position in a dump can show more than -100 % (17 positions, all
+in the rugged terrafying pool). `analyze --live` leaves replays out.
+
+**PHASE 6: market regime.** `src/features/regime.ts` labels each position at entry with one of the roadmap's eight
+regimes from one pool-discovery window: price change (MOMENTUM_UP / _DOWN), Meteora volatility (HIGH / LOW_VOLATILITY),
+LP net deposits as % of TVL (LIQUIDITY_EXPANSION / _CONTRACTION), UNSTABLE (a big move or LPs pulling a large share),
+else SIDEWAYS; the three axes are journaled apart (`regime_trend`, `regime_vol`, `regime_liquidity`, `regime_liq_pct`)
+with context features (volume acceleration 5m x 12 / 1h, holder growth, fee / active TVL). The collector now also
+fetches the **1 h window** (`regime.timeframe`), with the 5 min window as fallback and as `regime_5m`. Thresholds per
+window are hypotheses (`regime.thresholds`). Older sessions get a 5 min label in the scorecard from their journaled
+pd_* fields. Report dimensions: regime, each axis, volume acceleration.
+
+**PHASE 3: standard strategy interface.** `src/strategies/types.ts`: `evaluateReentry`, `evaluateEntry`,
+`calculateRange`, `evaluateExit` (optional, else the shared exit-policy engine) and `estimateTransactions`. Meridian,
+Friday and Yunus are modules (`src/strategies/*.ts`) and GridRunner runs them all through one loop (`openModule`),
+booking stats, width and position caps, the journal and the cycle per plan; it no longer knows their rules. All 391
+earlier tests pass unchanged, including the per-mode stats. Each module position journals its transaction estimate
+(`tx_est_min`, `tx_est_max`, `tx_per_operation`).
+
+**Evil Panda as entry mode `evil_panda`** (`presets/evil_panda.yaml`, `src/strategies/evilPanda.ts`), from the
+fork's source: token 24 h volume >= $750k and market cap >= $200k (Jupiter audit), green 5 min Supertrend (our
+OHLCV), the Meridian screen, token fees >= 30 SOL, top-10 <= 60 %; single-sided SOL Spot 80 % below the price; exit
+only in profit on RSI(2) > 90 with the close above the upper Bollinger band or the first green MACD histogram bar
+(MACD added to `indicators.ts`), plus Meridian's exit policy; re-entry 15 min after a close, at most 3 per pool (ours).
+Registry: implemented, fidelity interpretation (sizing and re-entry major, entry / filter / exit / transactions
+minor, side / range / rebalance none). yunus_flip's report text no longer calls it "EvilPanda".
+
+**PHASE 13:** `dlmm scorecard --holdout N` reports the selection and the holdout sessions apart.
+
+Not done, and why: PHASE 4's optimized mode needs Jev or a regime -> strategy table learned from 20+ sessions
+(research mode is the default and stays unbiased); PHASE 9-10 (Jev) per the roadmap's own plan start at 20-30
+sessions and need a paid LLM key; PHASE 11-12 need 50-100+ sessions; PHASE 14 needs all of them.
+400 tests pass.
+
 ## RPC: Helius Free + swap stream redesign (2026-09-29)
 - `.env` points to Helius (Free: 1M credits/month, 10 rps). Rate limits: critical 3 rps +
   swap stream 5 rps + token security 0.75 rps.
