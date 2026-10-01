@@ -949,6 +949,28 @@ Tests: `test/inKindSwap.test.ts` (5: tokens kept at the open, scaling in the -81
 bound over sides x exit_to x price moves x rebalance, exit swap); three existing tests now assert value + in-kind
 cost instead of the old identity. 405 tests pass.
 
+## Dashboard: biggest profit and loss per preset (2026-10-01)
+
+Besides the average, the running-PnL view (terminal and web) now lists for every entry mode the single biggest profit
+and the single biggest loss: dollars, percent of the position, pool (name plus the first characters of its address,
+several tokens share a symbol) and whether that position is still open (marked to market) or closed. Live sessions get it
+from the heartbeat (`best` / `worst` per entry mode); sessions without it (older heartbeats, finished or replayed
+sessions) show the closed positions' extremes from the database. Test: `test/phase6.test.ts`.
+
+## Yunus filter hypothesis (2026-10-01) — pre-registered, not a conclusion
+
+First look at `yunus_flip` over the 6 live sessions that ran it (954 positions, but only 77 independent entries: each
+entry opens 2-16 variants of the same cycle in one pool, and the variant hardly matters, median best-to-worst spread
+0.06 pp). The result depends on the token: age < 1 day averages -4.3 % per position (63 % win, a few -40..-60 %),
+mcap < $1M -10.2 %, mcap $1-10M +2.5 %, age 1-30 days +0.1 %; the `time_stop` control -1.25 % against -0.16 % for the
+breakeven exit. Few tokens (SI, BANDIT, RESI repeat) carry those numbers, and the data that suggests a filter cannot
+confirm it. So the hypothesis is written down before a holdout exists: `presets/yunus_filtered.yaml` = mcap >= $1M,
+token age >= 24 h, breakeven exit only (nothing else differs; a missing mcap or age skips the pool). Run it live with
+`config/session-2h-yunus-filtered.yaml` (label `sesi-2jam-yunus-filter`) and judge it by those sessions' signal vs
+baseline (`dlmm analyze --live --holdout N`, `dlmm scorecard`), not by the stored sessions; a replay of the stored
+sessions under the profile is only a sanity check. Changing the three values after seeing a holdout result makes it a new
+hypothesis that needs its own holdout. Test: `test/profiles.test.ts`.
+
 ## Interrupted sessions: `dlmm sim finalize` (2026-10-01) ✅
 
 Session `27e4aa83` ran 85 of 120 minutes: the connection dropped and the session was ended at about 09:42 WIB, so it

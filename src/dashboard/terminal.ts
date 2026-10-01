@@ -1,11 +1,20 @@
 import type { DashboardSession } from "./data.ts";
+import type { Extreme } from "../session/heartbeat.ts";
 
 const pad = (s: unknown, n: number) => String(s ?? "-").slice(0, n).padEnd(n);
 const num = (v: number | null | undefined, d = 2) => (v === null || v === undefined || !Number.isFinite(v) ? "-" : v.toFixed(d));
 const hhmm = (t: number | null | undefined) => (t ? new Date(t).toLocaleTimeString("id-ID", { hour12: false }) : "-");
+const usd = (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}$`;
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
 const color = (s: string, c: number) => `\x1b[${c}m${s}\x1b[0m`;
 const actionColor = (a: string) => (a === "MASUK" ? color(a, 32) : a === "PANTAU" ? color(a, 33) : color(a, 90));
+
+/** "best  +214.24$ (+21.4%)  POOL abcd  open": the biggest profit or loss of an entry mode. */
+export function extremeLine(label: string, tag: string, e: Extreme | null | undefined): string {
+  if (!e) return `${pad(label, 22)} ${tag} -`;
+  const c = e.usd >= 0 ? 32 : 31;
+  return `${pad(label, 22)} ${tag} ${color(pad(usd(e.usd), 11), c)} ${pad(`(${e.pct >= 0 ? "+" : ""}${e.pct.toFixed(1)}%)`, 9)} ${pad(e.pool, 18)} ${e.active ? "open" : "closed"}`;
+}
 
 /** Plain-text dashboard (blueprint 19): status, data health, latest signals, running PnL. */
 export function renderTerminal(v: DashboardSession, now = Date.now()): string {
@@ -43,10 +52,25 @@ export function renderTerminal(v: DashboardSession, now = Date.now()): string {
     for (const [k, a] of Object.entries(hb.pnl.byMode) as [string, any][]) {
       out.push(`${pad(k, 22)} ${pad(a.n, 6)} ${pad(a.active, 7)} ${pad(num((a.win / a.n) * 100, 0), 5)} ${pad(num(a.netUsd / a.n), 10)} ${pad(num(a.feeUsd / a.n), 10)} ${pad(num(a.ilUsd / a.n), 9)}`);
     }
+    out.push("");
+    out.push(bold("biggest profit / loss of one position per entry mode (open ones at their current mark, see the last column)"));
+    // a heartbeat written before this existed has no extremes: show the closed positions from the database then
+    for (const [k, a] of Object.entries(hb.pnl.byMode) as [string, any][]) {
+      const db = v.db.extremes.find((x) => x.k === k);
+      out.push(extremeLine(k, "best ", a.best ?? db?.best));
+      out.push(extremeLine("", "worst", a.worst ?? db?.worst));
+    }
+    out.push("");
     out.push(`by strategy: ${Object.entries(hb.pnl.byStrategy).map(([k, a]: [string, any]) => `${k} ${num(a.netUsd / a.n)}$`).join("  ")}`);
     out.push(`by exit policy: ${Object.entries(hb.pnl.byExit).map(([k, a]: [string, any]) => `${k} ${num(a.netUsd / a.n)}$`).join("  ")}`);
   } else {
     for (const r of v.db.byMode) out.push(`${pad(r.k, 22)} n ${r.n}  closed ${r.closed}  win ${num((r.win ?? 0) * 100, 0)}%  avg net ${num(r.net, 3)}%`);
+    out.push("");
+    out.push(bold("biggest profit / loss of one closed position per entry mode"));
+    for (const x of v.db.extremes) {
+      out.push(extremeLine(x.k, "best ", x.best));
+      out.push(extremeLine("", "worst", x.worst));
+    }
   }
 
   out.push("");

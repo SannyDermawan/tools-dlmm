@@ -4,6 +4,15 @@ import type { PoolSimulator } from "../sim/engine.ts";
 import type { GridRunner, SessionClock } from "../sim/gridRunner.ts";
 import type { DecisionStack } from "../signals/stack.ts";
 
+/** One position that stands out: the biggest profit or loss of an entry mode. */
+export interface Extreme {
+  usd: number;
+  pct: number;
+  /** pool name and the first characters of the pool address (several tokens share a symbol) */
+  pool: string;
+  active: boolean;
+}
+
 interface Agg {
   n: number;
   active: number;
@@ -11,6 +20,8 @@ interface Agg {
   feeUsd: number;
   ilUsd: number;
   win: number;
+  best?: Extreme;
+  worst?: Extreme;
 }
 
 /** Live session state for dashboards (written every status interval to session_heartbeat). */
@@ -26,8 +37,12 @@ export function buildHeartbeat(
   const byMode: Record<string, Agg> = {};
   const byStrategy: Record<string, Agg> = {};
   const byExit: Record<string, Agg> = {};
-  const add = (m: Record<string, Agg>, k: string, net: number, fee: number, il: number, active: boolean) => {
+  const add = (m: Record<string, Agg>, k: string, net: number, fee: number, il: number, active: boolean, who?: Extreme) => {
     const a = (m[k] ??= { n: 0, active: 0, netUsd: 0, feeUsd: 0, ilUsd: 0, win: 0 });
+    if (who) {
+      if (!a.best || who.usd > a.best.usd) a.best = who;
+      if (!a.worst || who.usd < a.worst.usd) a.worst = who;
+    }
     a.n++;
     if (active) a.active++;
     a.netUsd += net;
@@ -46,7 +61,9 @@ export function buildHeartbeat(
       const net = p.last.valueUsd + p.last.feeUsd - p.spec.capitalUsd - p.sunkCostUsd();
       const il = p.last.ilUsd;
       const act = p.status === "active";
-      add(byMode, p.spec.entryMode, net, p.last.feeUsd, il, act);
+      add(byMode, p.spec.entryMode, net, p.last.feeUsd, il, act, {
+        usd: net, pct: (net / p.spec.capitalUsd) * 100, pool: `${sim.meta.name} ${sim.meta.pool.slice(0, 4)}`, active: act,
+      });
       add(byStrategy, p.spec.strategy, net, p.last.feeUsd, il, act);
       add(byExit, String(p.spec.combo.exit_policy ?? "-"), net, p.last.feeUsd, il, act);
     }

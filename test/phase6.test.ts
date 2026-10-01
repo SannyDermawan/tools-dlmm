@@ -12,6 +12,7 @@ import { analyzeSessions, pickSessions } from "../src/report/crossSession.ts";
 import { writeSessionReport } from "../src/report/sessionReport.ts";
 import { sessionView } from "../src/dashboard/data.ts";
 import { renderTerminal } from "../src/dashboard/terminal.ts";
+import { buildHeartbeat } from "../src/session/heartbeat.ts";
 
 /** A simulation session with baseline + signal positions over two cohorts. */
 function fixture() {
@@ -159,6 +160,43 @@ describe("dashboard", () => {
     expect(live).toContain("42 min");
     expect(live).toContain("credits this session 123");
     expect(live).toMatch(/all_pools_baseline\s+8\s+7/);
+  });
+
+  it("shows the biggest profit and loss of one position per entry mode, from the database and from the heartbeat", () => {
+    const { db, sid } = fixture();
+    const view = sessionView(db, sid)!;
+    const base = view.db.extremes.find((x) => x.k === "all_pools_baseline")!;
+    expect(base.best).toMatchObject({ usd: 10, pct: 1, active: false });
+    expect(base.best!.pool).toMatch(/^PA A/);
+    expect(base.worst).toMatchObject({ usd: -10 });
+    expect(base.worst!.pool).toMatch(/^PB B/);
+    const text = renderTerminal(view).replace(/\[[0-9;]*m/g, "");
+    expect(text).toContain("biggest profit / loss of one closed position");
+    expect(text).toMatch(/all_pools_baseline\s+best\s+\+10\.00\$\s+\(\+1\.0%\)\s+PA A/);
+    expect(text).toMatch(/worst\s+-10\.00\$\s+\(-1\.0%\)\s+PB B/);
+
+    // live: open positions are marked to market; the extremes come from every position of the mode
+    const pos = (id: string, mode: string, value: number, status: "active" | "closed") => ({
+      status, spec: { entryMode: mode, strategy: "spot", capitalUsd: 1000, combo: {} }, last: { valueUsd: value, feeUsd: 0, ilUsd: 0 }, sunkCostUsd: () => 0, id,
+    });
+    const sim = (name: string, pool: string, ps: ReturnType<typeof pos>[]) => ({ meta: { name, pool }, list: () => ps });
+    const sims = new Map<string, any>([
+      ["pool1111", sim("YUN-SOL", "pool1111", [pos("a", "yunus_flip", 1214, "active"), pos("b", "yunus_flip", 990, "closed")])],
+      ["pool2222", sim("SI-SOL", "pool2222", [pos("c", "yunus_flip", 363, "closed"), pos("d", "meridian_preset", 1050, "active")])],
+    ]);
+    const hb = buildHeartbeat(sims as any, { stats: {} } as any, { phase: () => "active", start: 0, warmupEnd: 0, stopNewAt: 0, end: 1 } as any, null, null, 0);
+    const y = hb.pnl.byMode.yunus_flip;
+    expect(y.best).toEqual({ usd: 214, pct: 21.4, pool: "YUN-SOL pool", active: true });
+    expect(y.worst).toEqual({ usd: -637, pct: -63.7, pool: "SI-SOL pool", active: false });
+    expect(hb.pnl.byMode.meridian_preset.best).toEqual(hb.pnl.byMode.meridian_preset.worst); // a single position
+    expect(hb.pnl.byStrategy.spot.best).toBeUndefined();
+    db.insert("session_heartbeat", {
+      session_id: sid, ts: Date.now(), pid: 1,
+      state: JSON.stringify({ phase: "active", leftMin: 1, start: 0, warmupEnd: 1, stopNewAt: 2, end: 3, positions: { active: 1, pending: 0, closed: 0, failed: 0 }, grid: { cohorts: 1, rebalances: 0 }, exitEngine: null, signalsTotal: 0, pnl: hb.pnl, health: null }),
+    });
+    const live = renderTerminal(sessionView(db, sid)!).replace(/\[[0-9;]*m/g, "");
+    expect(live).toMatch(/yunus_flip\s+best\s+\+214\.00\$\s+\(\+21\.4%\)\s+YUN-SOL pool\s+open/);
+    expect(live).toMatch(/worst\s+-637\.00\$\s+\(-63\.7%\)\s+SI-SOL pool\s+closed/);
   });
 
   it("stop requests are stored for the running process to pick up", () => {

@@ -1,4 +1,5 @@
 import type { Db } from "../db/index.ts";
+import type { Extreme } from "../session/heartbeat.ts";
 
 export interface DashboardSession {
   session_id: string;
@@ -13,6 +14,8 @@ export interface DashboardSession {
     positions: { status: string; n: number }[];
     byMode: { k: string; n: number; closed: number; win: number | null; net: number | null; fee: number | null; il: number | null }[];
     byStrategy: { k: string; n: number; closed: number; win: number | null; net: number | null }[];
+    /** biggest profit and loss among the closed positions of each entry mode */
+    extremes: { k: string; best: Extreme | null; worst: Extreme | null }[];
     signals: { name: string; pool: string; ts: number; action: string; final: number | null; confidence: number | null; regime: string | null; reasons: string[] }[];
     signalCounts: { action: string; n: number }[];
     gapsOpen: { source: string; pool: string | null; start_at: number; cause: string }[];
@@ -37,6 +40,15 @@ export function sessionView(db: Db, sessionId: string, now = Date.now()): Dashbo
        FROM sim_positions p LEFT JOIN sim_results r USING(position_id) WHERE p.session_id = ? GROUP BY k ORDER BY k`,
       sessionId,
     );
+  const extremes = (mode: string, order: "DESC" | "ASC"): Extreme | null => {
+    const r = db.get<{ usd: number; capital: number; name: string; pool: string }>(
+      `SELECT r.net_pnl_usd usd, p.capital_usd capital, pl.name name, p.pool pool
+       FROM sim_positions p JOIN sim_results r USING(position_id) JOIN pools pl ON pl.pool = p.pool
+       WHERE p.session_id = ? AND p.entry_mode = ? AND p.status = 'closed' ORDER BY r.net_pnl_usd ${order} LIMIT 1`,
+      sessionId, mode,
+    );
+    return r ? { usd: r.usd, pct: (r.usd / r.capital) * 100, pool: `${r.name} ${r.pool.slice(0, 4)}`, active: false } : null;
+  };
   const latestTs = db.get<{ t: number | null }>("SELECT MAX(ts) t FROM signals WHERE session_id = ?", sessionId)?.t ?? null;
   const signals = latestTs
     ? db
@@ -61,6 +73,7 @@ export function sessionView(db: Db, sessionId: string, now = Date.now()): Dashbo
       positions: db.all("SELECT status, COUNT(*) n FROM sim_positions WHERE session_id = ? GROUP BY status", sessionId),
       byMode: agg("p.entry_mode"),
       byStrategy: agg("p.strategy"),
+      extremes: agg("p.entry_mode").map((m) => ({ k: m.k, best: extremes(m.k, "DESC"), worst: extremes(m.k, "ASC") })),
       signals,
       signalCounts: db.all("SELECT action, COUNT(*) n FROM signals WHERE session_id = ? GROUP BY action", sessionId),
       gapsOpen: db.all("SELECT source, pool, start_at, cause FROM data_gaps WHERE session_id = ? AND end_at IS NULL", sessionId),
