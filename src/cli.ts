@@ -429,6 +429,7 @@ program
   .option("--replays", "include replays (not independent evidence)")
   .option("-m, --mode <mode...>", "only these entry modes")
   .option("--capitals <list>", "capitals to project to, comma separated", capitalList, [40, 45, 50, 100, 1000])
+  .option("--holdout <n>", "keep the last N sessions apart: a scorecard for the selection sessions and one for the holdout (roadmap PHASE 13)", (v) => parseInt(v, 10), 0)
   .action(async (opts) => {
     const app = createApp(cfgPath());
     const { pickSessions } = await import("./report/crossSession.ts");
@@ -436,7 +437,23 @@ program
     const { mkdirSync, writeFileSync } = await import("node:fs");
     const sessions = pickSessions(app.db, { ids: opts.session, last: opts.last, label: opts.label, live: !opts.replays && !opts.session });
     if (!sessions.length) throw new Error("no simulation sessions with closed positions");
-    const md = scorecardMarkdown(scorecard(app.db, sessions.map((s) => s.session_id), { modes: opts.mode, capitals: opts.capitals, regime: app.lc.config.regime }));
+    const card = (ids: string[]) => scorecard(app.db, ids, { modes: opts.mode, capitals: opts.capitals, regime: app.lc.config.regime });
+    const ids = sessions.map((s) => s.session_id);
+    const h = Math.max(0, Math.min(opts.holdout as number, ids.length - 1));
+    const md = h > 0
+      ? [
+          `# Strategy scorecard: ${ids.length - h} selection session(s), ${h} holdout session(s)`,
+          "",
+          "Choose components and thresholds on the selection sessions only; the holdout is read once, at the end, to check the choice (roadmap PHASE 13 / 15).",
+          "",
+          `## Selection (${ids.length - h} sessions)`,
+          "",
+          scorecardMarkdown(card(ids.slice(0, -h)), { title: false }),
+          `## Holdout (${h} sessions, the latest)`,
+          "",
+          scorecardMarkdown(card(ids.slice(-h)), { title: false }),
+        ].join(String.fromCharCode(10))
+      : scorecardMarkdown(card(ids));
     mkdirSync("reports", { recursive: true });
     const file = `reports/scorecard-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.md`;
     writeFileSync(file, md);
