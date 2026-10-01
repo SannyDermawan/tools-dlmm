@@ -121,7 +121,10 @@ describe("partial exit and rebalance accounting", () => {
     const v2 = sim.valuation(p).valueUsd;
     sim.rebalance(p.id, "test", 6000);
     const v3 = sim.valuation(p).valueUsd;
-    expect(v3).toBeCloseTo(v2, 3);
+    // the balancing swap is paid in kind: fewer tokens are redeployed
+    const swapUsd = p.costs.filter((x) => x.type === "balancing_swap" && x.inKind).at(-1)!.usd;
+    expect(swapUsd).toBeGreaterThan(0);
+    expect(v3 + swapUsd).toBeCloseTo(v2, 3);
     expect(p.realizedQuote).toBeCloseTo(v0 / 2, 3); // unchanged by the rebalance
     const reb = sink.events.find((e) => e.type === "rebalance")!;
     expect(reb.detail.redeployedUsd as number).toBeCloseTo(v2 - p.realizedQuote, 3);
