@@ -949,6 +949,43 @@ Tests: `test/inKindSwap.test.ts` (5: tokens kept at the open, scaling in the -81
 bound over sides x exit_to x price moves x rebalance, exit swap); three existing tests now assert value + in-kind
 cost instead of the old identity. 405 tests pass.
 
+## Sessions 11 and 12, first reading of the Yunus filter (2026-10-01 / 02)
+
+**Session 11** (`8191bf42`, 20:31 WIB): the connection dropped after 69 of 120 minutes (data ends 21:39), so it was marked
+aborted (`dlmm db recover`) and finalized (`dlmm sim finalize`, replay `2feea917`, 6189 positions, 0 gap-tainted). Only
+cohort 1 is complete for the signal modes and yunus. Average net -1.64 %, yunus +0.56 % (108 positions, 8 entries, +2.42 pp
+over the baseline), signal_enter -2.37 %, signal_watch -2.36 %, friday_scalp -2.85 % (3), baseline -1.07 %.
+
+**Session 12** (`5a4a4fb3`, 22:48 - 00:50 WIB, 122 min, 10 841 positions, 0 gap-tainted): average net -0.25 %, win 57 %, the
+best session so far, because the two Jane-SOL pools (TVL $37-60k, price +30 % in an hour, fees about 10-15 % of the TVL per
+hour) pumped. Difference to the baseline: yunus -0.85 pp, signal_watch -0.46, signal_enter -0.36, friday -1.73, meridian
++1.28 (6 positions), royalmand +2.69 (1). Best position per preset: baseline +68.7 % (spot base-only 121 bins, 30 min
+`time_stop`; the dashboard showed +94 % while it was open), signal_enter +10.1 %, signal_watch +9.4 %, meridian +3.05 %,
+friday +3.80 %, yunus +2.68 %, royalmand +1.27 %. No new rug. Realism check stable (-0.28 pp after costs).
+
+**Over the 12 live sessions** (`analyze --live`): yunus +2.72 pp over the baseline (12 of 15 cohorts better), meridian +1.18
+(11 of 15), royalmand +2.60 (3 of 3, 4 positions), signal_watch -0.66, signal_enter -0.19, friday_scalp -0.55.
+
+**Yunus filter** (`presets/yunus_filtered.yaml`: mcap >= $1M, token age >= 24 h, breakeven exit; the sessions used to form it
+are 8-10): the stored yunus positions of each later session contain the filtered ones as an exact subset (the filter acts
+before the entry and positions do not influence each other), so no replay was needed.
+Session 11: without filter +0.56 % (108 positions), with it +0.43 % (46 of the breakeven variants; it dropped Jane-SOL,
++1.28 %). Session 12: without filter -0.17 %, with it +0.74 % (it dropped two Jane-SOL pools, one of them -14.4 %).
+Together: +0.17 % against +0.59 %. Two sessions, a few entries, one loss avoided: promising, not proven. Nothing about the
+filter was changed. The breakeven vs `time_stop` exit cannot be judged from 2 h sessions: every yunus position was closed
+by the end of the session (94 % over all sessions), so both exits give identical results. That needs sessions of 12-24 h.
+
+**Reading the extremes**: the best position of a mode depends on how many positions the mode opens (the baseline 90 per pool
+with every shape, yunus 4-16 quote-only, meridian 1) and on the market: a quote-only position (yunus, meridian) sits below
+the price and earns nothing while a token pumps, base-only and two-sided positions of the baseline collect the fees. A
+mark-to-market of an open position in a pumping thin pool can fall back by the close. Judge by averages and entries, not by
+the single biggest position.
+
+**Preset accounts** (`dlmm accounts`, session 12 only, $45 each, one position in one pool at a time): $315 -> $301.58
+(-4.3 %): yunus +1.0 % (1 trade), royalmand +0.9 % (1), meridian +0.9 % (2), signal_watch -1.3 % (2), friday -15.7 %
+(8 trades), signal_enter -15.6 % (1 trade, -15.6 %), evil_panda no trade (needs 12 h sessions). At most 5 accounts open at
+once in 5 pools; about $379 of wallet needed for all open together (rent about $6.7 per position, $21.6 for yunus).
+
 ## `dlmm accounts`: preset accounts of $45 (2026-10-01)
 
 Each of the 7 presets (all entry modes but the baseline control) as its own account of $45 with one position in one pool
