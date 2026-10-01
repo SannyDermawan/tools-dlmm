@@ -58,7 +58,7 @@ export function modeTable(db: Db, simSessionId: string): ModeRow[] {
     `SELECT p.entry_mode mode, COUNT(*) n, AVG(r.net_pnl_usd > 0) win, AVG(r.net_pnl_pct) net, SUM(r.net_pnl_usd) total
      FROM sim_positions p JOIN sim_results r USING(position_id)
      WHERE p.session_id = ? AND p.status = 'closed' AND p.gap_tainted = 0 GROUP BY p.entry_mode
-     ORDER BY CASE p.entry_mode WHEN 'all_pools_baseline' THEN 0 WHEN 'meridian_preset' THEN 1 WHEN 'friday_scalp' THEN 2 WHEN 'yunus_flip' THEN 3 WHEN 'evil_panda' THEN 4 ELSE 5 END, p.entry_mode`,
+     ORDER BY CASE p.entry_mode WHEN 'all_pools_baseline' THEN 0 WHEN 'meridian_preset' THEN 1 WHEN 'friday_scalp' THEN 2 WHEN 'yunus_flip' THEN 3 WHEN 'fork_panda' THEN 4 WHEN 'evil_panda' THEN 5 ELSE 6 END, p.entry_mode`,
     simSessionId,
   );
 }
@@ -84,7 +84,7 @@ export function formatSessionResult(db: Db, simSessionId: string, title: string)
     out.push("entry mode — n · win · avg net · total");
     for (const m of modes) out.push(`${m.mode}: ${m.n} · ${m.win === null ? "-" : (m.win * 100).toFixed(0) + "%"} · ${pct(m.net)} · ${usd(m.total)}`);
     const base = modes.find((m) => m.mode === "all_pools_baseline")?.net ?? null;
-    for (const m of modes.filter((x) => x.mode.startsWith("signal") || x.mode === "meridian_preset" || x.mode === "friday_scalp" || x.mode === "yunus_flip" || x.mode === "evil_panda"))
+    for (const m of modes.filter((x) => x.mode.startsWith("signal") || x.mode === "meridian_preset" || x.mode === "friday_scalp" || x.mode === "yunus_flip" || x.mode === "fork_panda" || x.mode === "evil_panda"))
       if (base !== null && m.net !== null) out.push(`→ ${m.mode} vs baseline: ${pct(m.net - base)} pp`);
   }
   const best = (expr: string) =>

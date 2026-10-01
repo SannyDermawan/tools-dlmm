@@ -68,9 +68,10 @@ Profiles: `config/session-2h.yaml` (laptop, 2 h) and `config/session-3d.yaml` (2
 pool state 15 s, bin snapshots 120 s, 2 swap samples per pool and minute, real LP scans every 30 min; for a
 24 h run add `-d 1440`). Capital profiles `config/capital/usd-{40,45,50,100,1000}.yaml` are the 2 h profile with
 another position size (a profile may `extends:` another one). Entry modes: `all_pools_baseline`, `meridian_preset`,
-`friday_scalp`, `yunus_flip` (Yunus flip cycle from tweet summaries, `presets/yunus.yaml`), `evil_panda` (the
-Meridian fork's Evil Panda from its source, `presets/evil_panda.yaml`), `signal_enter`, `signal_watch`. The preset
-modes are strategy modules with one interface (`src/strategies/`).
+`friday_scalp`, `yunus_flip` (Yunus flip cycle from tweet summaries, `presets/yunus.yaml`), `fork_panda` (the policy
+the Meridian fork calls `evil_panda`, from its source, `presets/fork_panda.yaml`), `evil_panda` (@EvilPanda's wide
+two-sided bid-ask held for days, from a summary, `presets/evil_panda.yaml`; only in sessions of 12 h or more),
+`signal_enter`, `signal_watch`. The preset modes are strategy modules with one interface (`src/strategies/`).
 
 ## Layout
 

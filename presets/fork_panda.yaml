@@ -1,0 +1,41 @@
+# fork_panda (entry mode fork_panda): the strategy the Meridian fork fciaf420/meridian calls `evil_panda`
+# in its code (prompt.js, tools/dlmm.js, config.js `evilPanda` block). It is that fork author's own policy
+# (GMGN token volume + Supertrend + RSI(2) exit) and NOT the playbook of @EvilPanda (token age >= 48 h,
+# wide two-sided bid-ask, held for days): that one runs as entry mode evil_panda (presets/evil_panda.yaml).
+# Not yunus_flip either. Read-only research: the simulator never trades.
+#
+#   entry   token 24 h volume >= $750k, market cap >= $200k, green 5-minute Supertrend with the
+#           price above it (the fork reads GMGN; we read the Jupiter audit and our own 5m OHLCV)
+#   filter  the Meridian screen (presets/meridian.yaml) + token fees >= 30 SOL + top-10 holders <= 60 %
+#   side    single-sided SOL: quote-only below the price (amount_y only), so the token must be the base
+#   range   Spot, 80 % below the price, nothing above
+#   exit    only while in profit: 5-minute RSI(2) > 90 AND (close above the Bollinger upper band OR the
+#           first green MACD histogram bar); Meridian's other exits still apply (its preset exit policy)
+#   reentry not specified by the source (the next screener cycle may pick the pool again): ours below
+screen:
+  min_token_volume_24h_usd: 750000
+  min_mcap_usd: 200000
+  require_risk_token_base: true      # quote-only = SOL only when the token is X and SOL is Y
+  supertrend:
+    timeframe: 5m
+    period: 10                       # the fork reads GMGN's indicator; its parameters are not in the code
+    multiplier: 3
+  meridian_screen: true              # the Meridian default screen must pass as well
+  min_token_fees_sol: 30
+  max_top10_pct: 60
+  missing_data: skip                 # skip | ignore: what a rule does when its input is missing
+range:
+  shape: spot
+  downside_pct: 80
+exit:
+  timeframe: 5m
+  require_profit: true
+  rsi_period: 2
+  rsi_above: 90
+  bb_period: 20
+  bb_k: 2
+  macd: { fast: 12, slow: 26, signal: 9 }
+  meridian_exits: true               # Meridian's preset exit policy runs as well (stop loss, take profit, out of range)
+reentry:
+  cooldown_minutes: 15               # ours: one position at a time per pool, a new one 15 min after the close
+  max_cycles_per_pool: 3

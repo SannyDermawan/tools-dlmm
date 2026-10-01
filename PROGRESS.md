@@ -850,7 +850,7 @@ combos, not a blocklist failure. Only ~2 independent market days so far.
 price moved -0.2% and LPs stayed. Its blocklist entries (token `Xsc9qvGR...`, dev `S7vYFFWH...`) were soft-removed; the
 session `8691ab49` vetoed its signals because of that entry. 381 tests pass.
 
-## Roadmap PHASE 3, 5, 6, 7, 8, 13 and Evil Panda (2026-10-01) ✅
+## Roadmap PHASE 3, 5, 6, 7, 8, 13, fork_panda and evil_panda (2026-10-01) ✅
 
 Built on a separate worktree while a live session ran, then merged.
 
@@ -887,13 +887,26 @@ booking stats, width and position caps, the journal and the cycle per plan; it n
 earlier tests pass unchanged, including the per-mode stats. Each module position journals its transaction estimate
 (`tx_est_min`, `tx_est_max`, `tx_per_operation`).
 
-**Evil Panda as entry mode `evil_panda`** (`presets/evil_panda.yaml`, `src/strategies/evilPanda.ts`), from the
-fork's source: token 24 h volume >= $750k and market cap >= $200k (Jupiter audit), green 5 min Supertrend (our
-OHLCV), the Meridian screen, token fees >= 30 SOL, top-10 <= 60 %; single-sided SOL Spot 80 % below the price; exit
-only in profit on RSI(2) > 90 with the close above the upper Bollinger band or the first green MACD histogram bar
-(MACD added to `indicators.ts`), plus Meridian's exit policy; re-entry 15 min after a close, at most 3 per pool (ours).
-Registry: implemented, fidelity interpretation (sizing and re-entry major, entry / filter / exit / transactions
-minor, side / range / rebalance none). yunus_flip's report text no longer calls it "EvilPanda".
+**Three different things were called "Evil Panda"; they are now three entry modes** (correction of the same day: the
+first version of this section took the fork's `evil_panda` for the @EvilPanda playbook, which it is not):
+- `fork_panda` (`presets/fork_panda.yaml`, `src/strategies/forkPanda.ts`): what the Meridian fork `fciaf420/meridian`
+  calls `evil_panda` in its code (`config.js`, `prompt.js`, verified against the files on 2026-10-01). It is that fork
+  author's own policy, not the playbook of the X account: token 24 h volume >= $750k and market cap >= $200k (Jupiter
+  audit), green 5 min Supertrend (our OHLCV), the Meridian screen, token fees >= 30 SOL, top-10 <= 60 %; single-sided
+  SOL Spot 80 % below the price; exit only in profit on RSI(2) > 90 with the close above the upper Bollinger band or
+  the first green MACD histogram bar (MACD added to `indicators.ts`), plus Meridian's exit policy; re-entry 15 min after a
+  close, at most 3 per pool (ours). Whether the fork borrowed the name from @EvilPanda is not known.
+- `evil_panda` (`presets/evil_panda.yaml`, `src/strategies/evilPanda.ts`): the **@EvilPanda "Evil Panda Strat"** as
+  summarised by Grok (posts of 26-29 September 2026; summary only). Coin selection first (token >= 48 h old, volume,
+  not a scam), then a two-sided Bid-Ask -90 % below that sits 1-3 days, closed in profit when the price bounces. Every
+  number the summary lacks is ours and marked in the preset: the upside +100 %, token 24 h volume >= $250k, TVL >=
+  $50k, no mint / freeze authority, "bounce" = +10 % off the low since the open while in profit, 3-day cap, re-entry
+  after 60 min (max 2). It holds for days, so it stays out of sessions shorter than 12 h (`session_too_short`): run it
+  in `config/session-3d.yaml` (`-d 1440`). The tight-range + bot version has no rules in the summary: not implemented.
+- `yunus_flip`: the Yunus flip from tweet summaries (unchanged).
+Registry: `fork_panda` implemented, fidelity interpretation (sizing and re-entry major, entry / filter / exit /
+transactions minor, side / range / rebalance none); `evil_panda` implemented from a summary (side none, filter major,
+range / exit minor, entry / position size / re-entry / transactions unknown because the summary is silent).
 
 **PHASE 13:** `dlmm scorecard --holdout N` reports the selection and the holdout sessions apart.
 

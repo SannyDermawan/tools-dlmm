@@ -1,39 +1,41 @@
-# Evil Panda (entry mode evil_panda), from the source of the Meridian fork fciaf420/meridian
-# (prompt.js, tools/dlmm.js, config.js `evilPanda` block). NOT the same strategy as yunus_flip, which
-# is built from tweet summaries. Read-only research: the simulator never trades.
+# Evil Panda (@EvilPanda) "Evil Panda Strat", as entry mode evil_panda.
 #
-#   entry   token 24 h volume >= $750k, market cap >= $200k, green 5-minute Supertrend with the
-#           price above it (the fork reads GMGN; we read the Jupiter audit and our own 5m OHLCV)
-#   filter  the Meridian screen (presets/meridian.yaml) + token fees >= 30 SOL + top-10 holders <= 60 %
-#   side    single-sided SOL: quote-only below the price (amount_y only), so the token must be the base
-#   range   Spot, 80 % below the price, nothing above
-#   exit    only while in profit: 5-minute RSI(2) > 90 AND (close above the Bollinger upper band OR the
-#           first green MACD histogram bar); Meridian's other exits still apply (its preset exit policy)
-#   reentry not specified by the source (the next screener cycle may pick the pool again): ours below
+# Source: a Grok summary of his posts of 26-29 September 2026, handed over by the user. Summary only, never
+# read from his own words or code, so every number that the summary does not give is OURS and marked below.
+# NOT the Meridian fork's `evil_panda` policy (that is entry mode fork_panda, presets/fork_panda.yaml) and
+# not yunus_flip. Read-only research: the simulator never trades.
+#
+# What the summary says (philosophy: "I do not predict memecoins, I rent liquidity to the people who do"):
+#   coin selection  70 % of the result: token at least 48 h old, good volume, relatively sound fundamentals
+#                   (not a pure scam); no random entry
+#   setup           two-sided Bid-Ask, a very wide range, -90 % or more below the price
+#   how it works    open, let it sit 1-3 days or longer; fees accrue while the price chops or dumps inside the
+#                   range; when the price bounces / pumps, close in profit
+#   examples        +$575 in almost 3 days (two days of dumping, a bounce on the third), +10 % in 20 h at -90 %,
+#                   +24 % in a day (bottom fishing after a dump)
+#   aggressive      a tight range plus a bot (+170 % in 18 min), "heart attack": no rules are given, NOT implemented
+#   downsides       capital inefficient (idle SOL on the lower side), lower daily fees, needs strict selection
+#
+# It holds for days: in a 2 h session every position would just be cut at the session end, so the module
+# stays out of sessions shorter than screen.min_session_minutes (use config/session-3d.yaml, `-d 1440`).
 screen:
-  min_token_volume_24h_usd: 750000
-  min_mcap_usd: 200000
-  require_risk_token_base: true      # quote-only = SOL only when the token is X and SOL is Y
-  supertrend:
-    timeframe: 5m
-    period: 10                       # the fork reads GMGN's indicator; its parameters are not in the code
-    multiplier: 3
-  meridian_screen: true              # the Meridian default screen must pass as well
-  min_token_fees_sol: 30
-  max_top10_pct: 60
-  missing_data: skip                 # skip | ignore: what a rule does when its input is missing
+  min_session_minutes: 720           # ours: a position that waits for a bounce needs at least half a day
+  min_token_age_hours: 48            # his rule
+  categories: [memecoin]             # ours: the summary talks about memecoins
+  min_token_volume_24h_usd: 250000   # ours: "good volume" has no number (token 24 h volume, Jupiter audit)
+  min_tvl_usd: 50000                 # ours: "relatively sound" proxy
+  fail_on_mint_authority: true       # ours: "not a pure scam" proxy
+  fail_on_freeze_authority: true
+  missing_security: skip             # skip | ignore
+  missing_data: skip                 # what a rule does when its input is missing
 range:
-  shape: spot
-  downside_pct: 80
+  shape: bidask
+  downside_pct: 90                   # his example range, "-90 % or more"
+  upside_pct: 100                    # ours: the upside width is not stated (two-sided = both tokens deposited)
 exit:
-  timeframe: 5m
-  require_profit: true
-  rsi_period: 2
-  rsi_above: 90
-  bb_period: 20
-  bb_k: 2
-  macd: { fast: 12, slow: 26, signal: 9 }
-  meridian_exits: true               # Meridian's preset exit policy runs as well (stop loss, take profit, out of range)
+  bounce_pct: 10                     # ours: "bounce / pump" = the price is this far above its low since the open ...
+  require_profit: true               # ... and the position is in profit (his: "close in profit")
+  time_cap_minutes: 4320             # his "1-3 days": the position is closed after 3 days if no bounce came
 reentry:
-  cooldown_minutes: 15               # ours: one position at a time per pool, a new one 15 min after the close
-  max_cycles_per_pool: 3
+  cooldown_minutes: 60               # ours: not stated
+  max_cycles_per_pool: 2

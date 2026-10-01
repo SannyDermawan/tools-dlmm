@@ -3,40 +3,28 @@ import { resolve } from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
 import type { PoolSimulator } from "../sim/engine.ts";
-import { binsForRangePct } from "../sim/distribution.ts";
-import { evaluateMeridian, feeWindowMinutes, meridianExitPolicy, type MeridianPreset } from "../sim/meridian.ts";
-import { exitPolicyLabel, type ScalarExitPolicy } from "../sim/policies.ts";
+import { binsForRangePct, binsForUpPct } from "../sim/distribution.ts";
 import { baseFeePct } from "../sim/friday.ts";
-import { macdHistSeries, pctBSeries, rsiSeries, supertrendSeries, type Candle } from "../features/indicators.ts";
+import { exitPolicyLabel, type ScalarExitPolicy } from "../sim/policies.ts";
 import { estimateCycleTransactions, type EntryTrigger, type EntryVerdict, type ExitContext, type ModuleEnv, type PreviousCycle, type RangeContext, type RangePlan, type StrategyModule } from "./types.ts";
 
 const presetSchema = z
   .object({
     screen: z
       .object({
-        min_token_volume_24h_usd: z.number().nonnegative(),
-        min_mcap_usd: z.number().nonnegative(),
-        require_risk_token_base: z.boolean(),
-        supertrend: z.object({ timeframe: z.enum(["5m", "15m", "30m", "1h"]), period: z.number().int().positive(), multiplier: z.number().positive() }).strict(),
-        meridian_screen: z.boolean(),
-        min_token_fees_sol: z.number().nonnegative().nullable(),
-        max_top10_pct: z.number().positive().nullable(),
+        min_session_minutes: z.number().nonnegative(),
+        min_token_age_hours: z.number().nonnegative(),
+        categories: z.array(z.string()),
+        min_token_volume_24h_usd: z.number().nonnegative().nullable(),
+        min_tvl_usd: z.number().nonnegative().nullable(),
+        fail_on_mint_authority: z.boolean(),
+        fail_on_freeze_authority: z.boolean(),
+        missing_security: z.enum(["skip", "ignore"]),
         missing_data: z.enum(["skip", "ignore"]),
       })
       .strict(),
-    range: z.object({ shape: z.enum(["spot", "curve", "bidask"]), downside_pct: z.number().positive().max(99) }).strict(),
-    exit: z
-      .object({
-        timeframe: z.enum(["5m", "15m", "30m", "1h"]),
-        require_profit: z.boolean(),
-        rsi_period: z.number().int().positive(),
-        rsi_above: z.number().min(0).max(100),
-        bb_period: z.number().int().positive(),
-        bb_k: z.number().positive(),
-        macd: z.object({ fast: z.number().int().positive(), slow: z.number().int().positive(), signal: z.number().int().positive() }).strict(),
-        meridian_exits: z.boolean(),
-      })
-      .strict(),
+    range: z.object({ shape: z.enum(["spot", "curve", "bidask"]), downside_pct: z.number().positive().max(99), upside_pct: z.number().positive() }).strict(),
+    exit: z.object({ bounce_pct: z.number().positive(), require_profit: z.boolean(), time_cap_minutes: z.number().positive() }).strict(),
     reentry: z.object({ cooldown_minutes: z.number().nonnegative(), max_cycles_per_pool: z.number().int().positive() }).strict(),
   })
   .strict();
@@ -48,74 +36,58 @@ export function loadEvilPandaPreset(path: string, baseDir = process.cwd()): Evil
 }
 
 export interface EvilPandaInputs {
+  sessionMinutes: number;
+  category: string;
+  tokenAgeHours: number | null;
   volume24hUsd: number | null;
-  mcapUsd: number | null;
-  riskIsBase: boolean | null;
-  tokenFeesSol: number | null;
-  top10Pct: number | null;
-  /** the Supertrend's candles of the screen timeframe, oldest first (complete candles only) */
-  supertrendCandles: Candle[];
-  /** failed checks of the Meridian screen (null = no Meridian inputs) */
-  meridianFailed: string[] | null;
+  tvlUsd: number | null;
+  /** risk token authorities; null = no security row yet */
+  mintAuthority: boolean | null;
+  freezeAuthority: boolean | null;
 }
 
-/** The entry screen: failed checks (empty = pass); `:no_data` when an input was missing and missing_data is skip. */
+/** Coin selection: the failed checks (empty = pass); `:no_data` when an input was missing and the rule is set to skip. */
 export function evaluateEvilPanda(pr: EvilPandaPreset, x: EvilPandaInputs): string[] {
   const s = pr.screen;
   const failed: string[] = [];
+  if (x.sessionMinutes < s.min_session_minutes) failed.push("session_too_short");
+  if (s.categories.length && !s.categories.includes(x.category)) failed.push("category");
   const need = (name: string, v: number | null, ok: (v: number) => boolean) => {
     if (v === null) {
       if (s.missing_data === "skip") failed.push(`${name}:no_data`);
     } else if (!ok(v)) failed.push(name);
   };
-  if (s.require_risk_token_base) {
-    if (x.riskIsBase === null) failed.push("risk_token_base:no_data");
-    else if (!x.riskIsBase) failed.push("risk_token_not_base");
-  }
-  need("token_volume_24h", x.volume24hUsd, (v) => v >= s.min_token_volume_24h_usd);
-  need("mcap", x.mcapUsd, (v) => v >= s.min_mcap_usd);
-  if (s.min_token_fees_sol !== null) need("token_fees", x.tokenFeesSol, (v) => v >= s.min_token_fees_sol!);
-  if (s.max_top10_pct !== null) need("top10", x.top10Pct, (v) => v <= s.max_top10_pct!);
-  // green Supertrend with the price above it: direction up on the last complete candle
-  const st = supertrendSeries(x.supertrendCandles, s.supertrend.period, s.supertrend.multiplier);
-  const dir = st.length ? st[st.length - 1] : null;
-  if (dir === null) failed.push("supertrend:no_data");
-  else if (dir !== 1) failed.push("supertrend_red");
-  if (s.meridian_screen) {
-    if (x.meridianFailed === null) failed.push("meridian:no_data");
-    else for (const f of x.meridianFailed) failed.push(`meridian:${f}`);
+  need("token_age", x.tokenAgeHours, (v) => v >= s.min_token_age_hours);
+  if (s.min_token_volume_24h_usd !== null) need("token_volume_24h", x.volume24hUsd, (v) => v >= s.min_token_volume_24h_usd!);
+  if (s.min_tvl_usd !== null) need("tvl", x.tvlUsd, (v) => v >= s.min_tvl_usd!);
+  for (const [name, on, v] of [
+    ["mint_authority", s.fail_on_mint_authority, x.mintAuthority],
+    ["freeze_authority", s.fail_on_freeze_authority, x.freezeAuthority],
+  ] as const) {
+    if (!on) continue;
+    if (v === null) {
+      if (s.missing_security === "skip") failed.push(`${name}:no_data`);
+    } else if (v) failed.push(name);
   }
   return failed;
 }
 
-/**
- * The fork's exit confluence on complete candles: RSI(n) > rsi_above AND (the close above the
- * upper Bollinger band OR the MACD histogram turned green on the last bar). Null = not enough candles.
- */
-export function evilPandaExitSignal(pr: EvilPandaPreset, cs: Candle[]): { fire: boolean; rsi: number | null; aboveBand: boolean; macdTurnedGreen: boolean } | null {
-  const e = pr.exit;
-  const closes = cs.map((c) => c.c);
-  if (closes.length < Math.max(e.bb_period, e.macd.slow + e.macd.signal, e.rsi_period + 1) + 1) return null;
-  const rsi = rsiSeries(closes, e.rsi_period).at(-1) ?? null;
-  const pb = pctBSeries(closes, e.bb_period, e.bb_k).at(-1) ?? null;
-  const h = macdHistSeries(closes, e.macd.fast, e.macd.slow, e.macd.signal);
-  const last = h.at(-1) ?? null;
-  const prev = h.at(-2) ?? null;
-  const aboveBand = pb !== null && pb > 1;
-  const macdTurnedGreen = last !== null && prev !== null && last > 0 && prev <= 0;
-  return { fire: rsi !== null && rsi > e.rsi_above && (aboveBand || macdTurnedGreen), rsi, aboveBand, macdTurnedGreen };
+/** The risk token's % move off its low: the price of the risk token, whichever side of the pool it is on. */
+export function bounceFromLowPct(riskIsBase: boolean, low: number, price: number): number {
+  const p = riskIsBase ? price : 1 / price;
+  return (p / low - 1) * 100;
 }
 
-const BARS = 80; // enough for MACD(12, 26, 9), Bollinger(20), RSI and the Supertrend warm-up
-
 /**
- * evil_panda (Meridian fork, source code): single-sided SOL Spot 80 % below the price in a pool
- * whose token passes the screen; exits on the indicator confluence while in profit, plus Meridian's
- * exit policy. One position at a time per pool; a new one cooldown_minutes after the close.
+ * evil_panda (@EvilPanda playbook, from a summary): coin selection first (token at least 48 h old with
+ * volume, no authorities), then a two-sided Bid-Ask 90 % below and 100 % above the price that sits for
+ * up to 3 days; closed in profit when the token bounces off its low (or after the time cap). One position
+ * per pool at a time. The bounce rule is a module exit; the time cap is the plan's exit policy.
  */
-export function evilPandaModule(pr: EvilPandaPreset, meridian: MeridianPreset | null, env: ModuleEnv): StrategyModule {
-  const meridianExit: ScalarExitPolicy = pr.exit.meridian_exits && meridian ? meridianExitPolicy(meridian) : { type: "hold_to_session_end" };
-  const win = meridian ? feeWindowMinutes(meridian) : 0;
+export function evilPandaModule(pr: EvilPandaPreset, env: ModuleEnv): StrategyModule {
+  const exitPolicy: ScalarExitPolicy = { type: "time_stop", minutes: pr.exit.time_cap_minutes };
+  /** lowest risk-token price seen since each position's open (the module is the only reader) */
+  const lows = new Map<string, number>();
   return {
     id: "evil_panda",
     entryMode: "evil_panda",
@@ -132,39 +104,40 @@ export function evilPandaModule(pr: EvilPandaPreset, meridian: MeridianPreset | 
     evaluateEntry(sim: PoolSimulator, ts: number): EntryVerdict | null {
       const pool = sim.meta.pool;
       const ti = env.signals.tokenInfo?.(pool, ts) ?? null;
-      if (!ti) return null;
-      let meridianFailed: string[] | null = null;
-      if (pr.screen.meridian_screen && meridian) {
-        const x = env.signals.presetInputs?.(pool, ts, sim, win) ?? null;
-        if (x) {
-          const ev = evaluateMeridian(meridian, x);
-          meridianFailed = ev.pass ? [] : ev.failed;
-        }
-      }
+      const fi = env.signals.fridayInputs?.(pool, ts) ?? null;
+      if (!ti || !fi) return null;
       const failed = evaluateEvilPanda(pr, {
-        volume24hUsd: ti.volume24hUsd ?? null, mcapUsd: ti.mcapUsd, riskIsBase: ti.riskIsBase ?? null, tokenFeesSol: ti.tokenFeesSol ?? null,
-        top10Pct: ti.top10Pct ?? null, supertrendCandles: env.signals.candles?.(pool, ts, pr.screen.supertrend.timeframe, BARS) ?? [], meridianFailed,
+        sessionMinutes: env.sessionMinutes ?? env.c.session.duration_minutes, category: sim.meta.category,
+        tokenAgeHours: ti.tokenAgeHours, volume24hUsd: ti.volume24hUsd ?? null, tvlUsd: fi.tvlUsd,
+        mintAuthority: fi.mintAuthority, freezeAuthority: fi.freezeAuthority,
       });
       return { failed, missing: [] };
     },
     calculateRange(sim: PoolSimulator, _ts: number, ctx: RangeContext): RangePlan {
-      const bins = binsForRangePct(pr.range.downside_pct, sim.meta.binStep);
+      const below = binsForRangePct(pr.range.downside_pct, sim.meta.binStep);
+      const above = binsForUpPct(pr.range.upside_pct, sim.meta.binStep);
       return {
-        strategy: pr.range.shape, sides: "quote_only", binsBelow: bins, binsAbove: 0, exitPolicy: meridianExit,
+        strategy: pr.range.shape, sides: "two_sided", binsBelow: below, binsAbove: above, exitPolicy,
         combo: {
-          strategy: pr.range.shape, bins_per_side: bins, sides: "quote_only", range_pct: pr.range.downside_pct,
-          exit_policy: `evil_panda_confluence+${exitPolicyLabel(meridianExit)}`, variant: "none", cycle_no: ctx.n, reentry: ctx.hasPrevious, at_cohort: ctx.trigger !== "reentry",
+          strategy: pr.range.shape, bins_per_side: below, sides: "two_sided", range_pct: pr.range.downside_pct, up_pct: pr.range.upside_pct,
+          exit_policy: `bounce${pr.exit.bounce_pct}%+${exitPolicyLabel(exitPolicy)}`, variant: "none", cycle_no: ctx.n, reentry: ctx.hasPrevious, at_cohort: ctx.trigger !== "reentry",
           base_fee_pct: baseFeePct(sim.meta), collect_fee_mode: sim.meta.collectFeeMode,
         },
       };
     },
     evaluateExit(x: ExitContext): string | null {
+      const price = x.sim.priceUi;
+      if (!price || price <= 0) return null;
+      const riskIsBase = env.signals.tokenInfo?.(x.sim.meta.pool, x.ts)?.riskIsBase ?? true;
+      const seen = riskIsBase ? price : 1 / price;
+      const low = Math.min(lows.get(x.p.id) ?? seen, seen);
+      lows.set(x.p.id, low);
       if (pr.exit.require_profit && x.netPct <= 0) return null;
-      const cs = env.signals.candles?.(x.sim.meta.pool, x.ts, pr.exit.timeframe, BARS) ?? [];
-      const sig = evilPandaExitSignal(pr, cs);
-      if (!sig?.fire) return null;
-      x.sim.logExitSignal(x.p.id, x.ts, { action: "KELUAR", reason: "evil_panda_confluence", rsi: sig.rsi, aboveBand: sig.aboveBand, macdTurnedGreen: sig.macdTurnedGreen, pnlPct: x.netPct });
-      return "evil_panda_confluence";
+      const bounce = bounceFromLowPct(riskIsBase, low, price);
+      if (bounce < pr.exit.bounce_pct) return null;
+      x.sim.logExitSignal(x.p.id, x.ts, { action: "KELUAR", reason: "evil_panda_bounce", bouncePct: bounce, pnlPct: x.netPct });
+      lows.delete(x.p.id);
+      return "evil_panda_bounce";
     },
     estimateTransactions: (plan) => estimateCycleTransactions(env.c, plan),
   };

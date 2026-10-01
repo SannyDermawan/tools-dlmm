@@ -1,8 +1,9 @@
 # Yunus (@0xyunss) / EvilPanda flip playbook, as entry mode yunus_flip.
 #
-# Source: public summaries of the playbooks (tweets, unverified). NOT the code: Meridian's `evil_panda` policy
-# (fciaf420/meridian fork) is a different thing (single-sided SOL Spot 80 % below, Supertrend / volume / mcap
-# entry gate, RSI(2) exit, no flip); the closest public code for the flip is hummingbot's lp_rebalancer.
+# Source: public summaries of the playbooks (tweets, unverified). NOT the code: the Meridian fork's own policy
+# (fork_panda, which its code calls `evil_panda`: single-sided SOL Spot 80 % below, Supertrend / volume / mcap
+# entry gate, RSI(2) exit, no flip) is a different thing, and so is @EvilPanda's wide two-sided bid-ask
+# (entry mode evil_panda); the closest public code for the flip is hummingbot's lp_rebalancer.
 # See registry/strategies.yaml. What we simulate:
 #   1. enter with a bid-ask, quote-only position below the price (downside -30 / -50 / -70 / -90 %),
 #   2. hold, no stop loss, until the whole position is converted to the token (price fell through it),

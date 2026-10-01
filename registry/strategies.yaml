@@ -38,7 +38,7 @@ sources:
     kind: fork of yunus-0x/meridian (488 commits ahead, 189 behind at reading time)
     relation: fork of yunus-0x/meridian
     read: "2026-09-30 source code"
-    notes: "Adds the named policy evil_panda (prompt.js, tools/dlmm.js, config.js), GMGN screening, autoresearch, Telegram UI."
+    notes: "Adds a policy it names evil_panda (prompt.js, tools/dlmm.js, config.js; here: fork_panda), GMGN screening, autoresearch, Telegram UI. The name is the fork author's: it does not implement the @EvilPanda playbook."
   - id: irfndi/prism-liquidity-agent
     url: https://github.com/irfndi/prism-liquidity-agent
     kind: live rule-based agent (TypeScript, Bun), optional agent overlay
@@ -250,7 +250,7 @@ strategies:
       rebalance: { original: "Flip when fully converted to the token.", implemented: "The same, up to 2 flips per position.", deviation: none, where: "src/sim/gridRunner.ts tryFlip" }
       transaction_policy: { original: "Not stated.", implemented: "Our cost model: open, flips and close; no balancing swap after the first deposit.", deviation: unknown, reason: "No stated policy." }
     notes:
-      - "Built from summaries, not code. It is NOT Meridian's evil_panda (see that entry): there is no flip in that code."
+      - "Built from summaries, not code. It is NOT the Meridian fork's policy (fork_panda): there is no flip in that code. Nor is it the wide two-sided playbook of evil_panda (a separate summary)."
       - "The closest public code for the flip is hummingbot's lp_rebalancer (BUY = quote-only below the price, SELL = base-only above, re-open on the other side after an auto-close), whose documented default size is $50."
       - "Meridian's upstream strategy library also has single_sided_reseed (token-only bid-ask, re-open lower without swapping), which our variant single_sided_reseed models."
     transaction_profile: { churn: low, notes: "A cycle can last hours; transactions are open, flips and close; no balancing swap after the first deposit." }
@@ -261,12 +261,12 @@ strategies:
       - "382 positions in 2 sessions, +3.4 pp vs baseline, better in 4 of 4 cohorts with entries; but 376 of them opened in the first cohort of each session (188 each), so it is about two samples, and cycles rarely complete within 2 h (censored)."
 
   # ================================================================= external, candidates and references (not in the grid)
-  - id: evil_panda
-    name: Evil Panda (Meridian fork policy)
+  - id: fork_panda
+    name: Meridian fork's own `evil_panda` policy (fork author's, not the @EvilPanda playbook)
     kind: external
     status: implemented
-    entry_mode: evil_panda
-    source: { name: "fciaf420/meridian prompt.js, tools/dlmm.js, config.js (evilPanda block)", url: "https://github.com/fciaf420/meridian", verified: source_code }
+    entry_mode: fork_panda
+    source: { name: "fciaf420/meridian prompt.js, tools/dlmm.js, config.js (the `evilPanda` block; the fork's own policy)", url: "https://github.com/fciaf420/meridian", verified: source_code }
     fidelity: interpretation
     components:
       entry: { original: "Token 24 h volume >= $750k, market cap >= $200k and a green 5-minute Supertrend with the price above it (GMGN data); otherwise skip (hard skip in code).", implemented: "Same thresholds; the token 24 h volume and market cap come from the Jupiter audit, the Supertrend (period 10, multiplier 3) from our own 5-minute OHLCV, direction up on the last complete candle.", deviation: minor, reason: "Other data sources than GMGN; the fork does not state its Supertrend parameters.", where: "presets/evil_panda.yaml screen, src/strategies/evilPanda.ts evaluateEvilPanda" }
@@ -279,10 +279,36 @@ strategies:
       rebalance: { original: "None specified.", implemented: "None.", deviation: none }
       transaction_policy: { original: "Meridian's: priority fee Medium, an 80 % range needs several transactions at bin step 100.", implemented: "Our cost model: priority fee percentile, an 80 % range at bin step 100 is about 161 bins = 3 transactions per open and close.", deviation: minor, reason: "Our priority-fee model, not Meridian's Medium setting." }
     notes:
-      - "Runs as entry mode evil_panda through the standard strategy interface (src/strategies, roadmap PHASE 3); its exit is the first module-specific evaluateExit."
+      - "Runs as entry mode fork_panda through the standard strategy interface (src/strategies, roadmap PHASE 3); its exit is the first module-specific evaluateExit."
+      - "The fork's code names this policy `evil_panda`. It is the fork author's own (GMGN volume + Supertrend + RSI(2) exit), nothing in it is the @EvilPanda playbook (token age >= 48 h, wide two-sided bid-ask held for days), which is the strategy evil_panda below. Whether the fork borrowed the name from him is not known."
       - "The author's own claim in the prompt (spot without a SOL split -10.75 %, with split +7.48 % at 73 % wins) comes from his lessons file, unverified."
     transaction_profile: { churn: low, notes: "One position at a time per pool; exit only on the indicator confluence while in profit." }
     capital_sensitivity: { fixed_cost_exposure: low, notes: "Few transactions; an 80 % wide single-sided range needs about 160 bins at bin step 100 -> several transactions." }
+    evidence: []
+
+  - id: evil_panda
+    name: Evil Panda Strat (@EvilPanda, wide two-sided bid-ask)
+    kind: external
+    status: implemented
+    entry_mode: evil_panda
+    source: { name: "@EvilPanda posts of 26-29 September 2026, as summarised by Grok (handed over by the user)", url: null, verified: summary_only }
+    fidelity: interpretation
+    components:
+      entry: { original: "A token that qualifies is the entry; selection is the strategy (70 % of the result), no random entries; no timing signal is stated.", implemented: "Opens at every cohort in each pool that passes the selection, then again after the cooldown.", deviation: unknown, reason: "The summary does not say when inside a qualifying token he opens.", where: "src/strategies/evilPanda.ts evaluateEntry" }
+      filter: { original: "Token at least 48 hours old, good volume, relatively sound fundamentals (not a pure scam).", implemented: "Token age >= 48 h (Jupiter audit / first pool), token 24 h volume >= $250k, pool TVL >= $50k, no mint or freeze authority, memecoin pools; session at least 12 h.", deviation: major, reason: "'Good volume' and 'sound fundamentals' are judgements; replaced by numeric proxies of ours. The 12 h session floor is ours (the position waits for days).", where: "presets/evil_panda.yaml screen" }
+      side: { original: "Two-sided Bid-Ask.", implemented: "Two-sided Bid-Ask (both tokens deposited, balancing swap at the open).", deviation: none, where: "presets/evil_panda.yaml range" }
+      range: { original: "Very wide, -90 % in his examples (or more); the upside is not stated.", implemented: "-90 % below the price and +100 % above (bins from the pool's bin step; a pool whose range needs more than 1400 bins is skipped).", deviation: minor, reason: "The upside width is not stated, ours is an assumption.", where: "presets/evil_panda.yaml range" }
+      position_size: { original: "Not stated (an example result is +$575 in about three days).", implemented: "The session's virtual capital per position.", deviation: unknown, reason: "The summary gives no size." }
+      exit: { original: "Let the position sit 1-3 days or longer while the price chops or dumps inside the range (fees accrue); when the price bounces or pumps, close in profit.", implemented: "Close when net PnL > 0 and the token is >= 10 % above its low since the open, or after 3 days.", deviation: minor, reason: "'Bounce / pump' is not defined; 10 % off the low while in profit is ours, and the 3-day cap follows his 1-3 days.", where: "src/strategies/evilPanda.ts evaluateExit, presets/evil_panda.yaml exit" }
+      reentry: { original: "Not stated.", implemented: "One position per pool at a time; a new one 60 minutes after the close, at most 2 per pool and session.", deviation: unknown, reason: "The summary says nothing about re-entry." }
+      rebalance: { original: "None stated; the range is wide so the position sits.", implemented: "None.", deviation: none }
+      transaction_policy: { original: "Not stated; the position sits for days, so few operations are implied.", implemented: "Our cost model: open and close take several transactions for a range of hundreds of bins (about 300 bins at bin step 100), no rebalances.", deviation: unknown, reason: "The summary gives no transaction detail." }
+    notes:
+      - "Source is a summary only: every number it does not give is ours (see presets/evil_panda.yaml). The aggressive tight-range + bot version (+170 % in 18 min) has no rules in the summary and is not implemented."
+      - "It holds for days, so it only runs in sessions of at least 12 h (config/session-3d.yaml, `-d 1440`); in a 2 h session the module stays out (`session_too_short`)."
+      - "Not the fork's own `evil_panda` policy (that is fork_panda) and not yunus_flip."
+    transaction_profile: { churn: low, notes: "Two to three operations per position and days between them; the open and the close each need several transactions for a range this wide." }
+    capital_sensitivity: { fixed_cost_exposure: low, notes: "Few operations, but the author calls it capital inefficient (idle quote on the lower side), the idle share is the cost for a small account." }
     evidence: []
 
   - id: hummingbot_lp_rebalancer

@@ -624,7 +624,7 @@ program
   .description("sequential account over stored positions: one at a time, compounding, daily stop (Friday-style calendar and drawdown)")
   .option("-s, --session <id...>", "simulation session(s); several are chained by time")
   .option("--last <n>", "the last N finished live sessions", (v) => parseInt(v, 10))
-  .requiredOption("-m, --mode <mode>", "entry mode: friday_scalp, yunus_flip, evil_panda, meridian_preset, signal_enter, signal_watch, all_pools_baseline")
+  .requiredOption("-m, --mode <mode>", "entry mode: friday_scalp, yunus_flip, fork_panda, evil_panda, meridian_preset, signal_enter, signal_watch, all_pools_baseline")
   .option("-w, --where <filter...>", "grid_combo filters: key=value or key~prefix, e.g. exit_policy~scalp bins_per_side=34 strategy=spot")
   .option("--capital <usd>", "starting capital", parseFloat)
   .option("--fraction <f>", "share of the equity per trade (1 = all, compounding)", parseFloat)
