@@ -41,10 +41,10 @@ export function printSimSummary(db: Db, sessionId: string) {
   }
   console.log(`\n  by pool`);
   for (const r of db.all<Row & { name: string }>(
-    `SELECT pl.name, COUNT(*) n, AVG(r.net_pnl_usd > 0) win, AVG(r.net_pnl_pct) avg_net_pct, AVG(r.fee_usd) avg_fee, AVG(r.il_usd) avg_il,
+    `SELECT pl.name || ' ' || substr(p.pool,1,6) AS name, COUNT(*) n, AVG(r.net_pnl_usd > 0) win, AVG(r.net_pnl_pct) avg_net_pct, AVG(r.fee_usd) avg_fee, AVG(r.il_usd) avg_il,
             AVG(r.cost_usd) avg_cost, AVG(r.time_in_range_pct) avg_in_range, SUM(p.gap_tainted) tainted
      FROM sim_positions p JOIN sim_results r USING(position_id) JOIN pools pl ON pl.pool = p.pool
      WHERE p.session_id = ? GROUP BY p.pool ORDER BY avg_net_pct DESC`, sessionId,
-  )) console.log(fmt(r, r.name.slice(0, 24)));
+  )) console.log(fmt(r, r.name.slice(0, 28)));
   console.log("\n  NOTE: one session proves nothing; judge strategies across many sessions (blueprint 13.4).");
 }

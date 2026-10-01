@@ -174,7 +174,7 @@ export function rugReportMarkdown(r: RugReport): string {
     const f = c.before;
     const auth = !f || f.mintActive === null ? "-" : `${f.mintActive ? "mint" : "-"} / ${f.freezeActive ? "freeze" : "-"}`;
     md.push(
-      `| ${f?.symbol ?? c.token.slice(0, 6)} | ${new Date(c.t).toISOString().slice(0, 16).replace("T", " ")} | ${c.rule ?? "-"} | ${n(c.priceDropPct)} | ${n(c.lpWithdrawalPct)} | ` +
+      `| ${f?.symbol ? `${f.symbol} (${c.token.slice(0, 6)})` : c.token.slice(0, 6)} | ${new Date(c.t).toISOString().slice(0, 16).replace("T", " ")} | ${c.rule ?? "-"} | ${n(c.priceDropPct)} | ${n(c.lpWithdrawalPct)} | ` +
         `${f ? n(f.mcapUsd) : "-"} | ${f ? n(f.top10Pct, 1) : "-"} | ${f ? n(f.holders) : "-"} | ${f ? n(f.organic) : "-"} | ${f ? n(f.botHoldersPct, 1) : "-"} | ` +
         `${f ? n(f.bundlerPct, 1) : "-"} | ${auth} | ${f ? n(f.tokenAgeHours, 1) : "-"} |`,
     );

@@ -54,6 +54,8 @@ describe("rug post-mortem", () => {
     const md = rugReportMarkdown(r);
     expect(md).toContain("price_and_lp");
     expect(md).toContain("bot holders <= 30%");
+    // tokens that share a symbol are told apart by the start of the mint
+    expect(md).toContain("| RUG (rug) |");
   });
 
   it("says so when nothing was flagged", () => {

@@ -273,7 +273,7 @@ export function writeSessionReport(db: Db, simSessionId: string, outDir = "repor
   md.push("- Fee reconciliation: run `dlmm reconcile -s <data session> [--census]`.");
 
   const positions = db.all<Record<string, unknown>>(
-    `SELECT p.position_id, p.pool, pl.name AS pool_name, pl.category, p.entry_mode, p.strategy, p.sides, p.bins_below, p.bins_above,
+    `SELECT p.position_id, p.pool, pl.name AS pool_name, pl.name || ' (' || substr(p.pool,1,6) || ')' AS pool_label, pl.category, p.entry_mode, p.strategy, p.sides, p.bins_below, p.bins_above,
             json_extract(p.grid_combo,'$.exit_policy') AS exit_policy, json_extract(p.grid_combo,'$.cohort') AS cohort,
             p.lower_bin, p.upper_bin, p.capital_usd, p.requested_at, p.opened_at, p.closed_at, p.close_reason, p.gap_tainted, p.status,
             r.fee_usd, r.il_usd, r.cost_usd, r.rent_locked_usd, r.net_pnl_usd, r.net_pnl_pct, r.time_in_range_pct, r.duration_min,
