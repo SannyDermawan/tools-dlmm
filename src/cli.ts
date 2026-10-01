@@ -703,8 +703,8 @@ program
 program
   .command("accounts")
   .description("preset accounts: every entry mode as its own small account (default $45) with one position in one pool at a time, over live sessions")
-  .option("-s, --session <id...>", "simulation session(s); default: the last live sessions (finalized interrupted ones count)")
-  .option("--last <n>", "the last N live sessions", (v) => parseInt(v, 10), 4)
+  .option("-s, --session <id...>", "simulation session(s); default: the last live session (a finalized interrupted one counts)")
+  .option("--last <n>", "the last N live sessions", (v) => parseInt(v, 10), 1)
   .option("--capital <usd>", "account size in USD", parseFloat, 45)
   .option("--no-reprice", "keep the stored result at the simulator's position size (default: re-price the fixed costs to the account's size)")
   .option("-o, --out <dir>", "write the markdown and the trade CSV here", "reports/accounts")
