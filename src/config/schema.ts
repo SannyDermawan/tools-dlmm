@@ -18,7 +18,7 @@ const collector = <T extends z.ZodRawShape>(shape: T) =>
 export const STRATEGIES = ["spot", "curve", "bidask"] as const;
 export const SIDES = ["two_sided", "base_only", "quote_only"] as const;
 export const CATEGORIES = ["memecoin", "bluechip"] as const;
-export const ENTRY_MODES = ["all_pools_baseline", "meridian_preset", "friday_scalp", "yunus_flip", "signal_enter", "signal_watch"] as const;
+export const ENTRY_MODES = ["all_pools_baseline", "meridian_preset", "friday_scalp", "yunus_flip", "evil_panda", "signal_enter", "signal_watch"] as const;
 export const OHLCV_TIMEFRAMES = ["5m", "30m", "1h", "2h", "4h", "12h", "24h"] as const;
 
 const numOrList = z.union([z.number().positive(), z.array(z.number().positive()).min(1)]);
@@ -506,7 +506,7 @@ export const ConfigSchema = z
       })
       .strict(),
     weights_profile: z.string(),
-    presets: z.object({ meridian: z.string(), friday: z.string(), yunus: z.string().default("presets/yunus.yaml") }).strict(),
+    presets: z.object({ meridian: z.string(), friday: z.string(), yunus: z.string().default("presets/yunus.yaml"), evil_panda: z.string().default("presets/evil_panda.yaml") }).strict(),
     memory: z
       .object({
         cooldown: z

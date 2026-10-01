@@ -102,6 +102,7 @@ export function buildDecisionStack(
     exitEngine,
     memory,
     indicators: scoring.indicators ?? undefined,
+    candles: scoring.indicators ? (pool, t, tf, bars) => scoring.indicators!.candles(pool, t, tf, bars) : undefined,
     smartLp: smartLp ? (pool, t) => { const r = smartLp.at(pool, t); return r ? { smart: r.count, openPositions: r.openPositions } : null; } : undefined,
     tokenInfo: (pool, t) => {
       const m = metaOf.get(pool);
@@ -131,6 +132,7 @@ export function buildDecisionStack(
         riskIsBase: m ? !bluechip.has(m.tokenX) : undefined,
         top10Pct: sec?.top10_pct ?? a?.top_holders_pct ?? null, holders: sec?.total_holders ?? a?.holder_count ?? null,
         organic: a?.organic_score ?? null, botHoldersPct: a?.bot_holders_pct ?? null, bundlerPct: a?.bundler_holding_pct ?? null,
+        volume24hUsd: a?.volume_24h_usd ?? null,
         volatilityPct, priceChangePct: tr ? priceChangePct(tr.prices, t, winMs) : null, binUtilization: binUtil, tokenFeesSol: a?.fees_sol ?? null,
         pdTimeframe: pd ? pdTimeframe : null, pdVolatility: pd?.volatility ?? null, pdPriceChangePct: pd?.price_change_pct ?? null,
         pdNetDepositsUsd: pd?.net_deposits ?? null, pdCriticalWarning: pd ? hasCriticalWarning(pd) : null, pdUniqueTraders: pd?.unique_traders ?? null, pdSwapCount: pd?.swap_count ?? null,

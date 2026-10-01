@@ -49,6 +49,35 @@ export function pctBSeries(closes: number[], n: number, k: number): (number | nu
   });
 }
 
+/** Exponential moving average per bar, seeded with the simple mean of the first n values (null before). */
+export function emaSeries(v: number[], n: number): (number | null)[] {
+  const out: (number | null)[] = v.map(() => null);
+  if (v.length < n) return out;
+  const k = 2 / (n + 1);
+  let e = v.slice(0, n).reduce((a, b) => a + b, 0) / n;
+  out[n - 1] = e;
+  for (let i = n; i < v.length; i++) {
+    e = v[i] * k + e * (1 - k);
+    out[i] = e;
+  }
+  return out;
+}
+
+/** MACD histogram per bar: (EMA fast - EMA slow) - EMA signal of that line (null during warm-up). */
+export function macdHistSeries(closes: number[], fast: number, slow: number, signal: number): (number | null)[] {
+  const f = emaSeries(closes, fast);
+  const s = emaSeries(closes, slow);
+  const line = closes.map((_, i) => (f[i] !== null && s[i] !== null ? f[i]! - s[i]! : null));
+  const start = line.findIndex((x) => x !== null);
+  const out: (number | null)[] = closes.map(() => null);
+  if (start < 0) return out;
+  const sig = emaSeries(line.slice(start) as number[], signal);
+  sig.forEach((x, j) => {
+    if (x !== null) out[start + j] = line[start + j]! - x;
+  });
+  return out;
+}
+
 /** Supertrend direction per bar (+1 up, -1 down; null during warm-up), ATR by Wilder smoothing. */
 export function supertrendSeries(cs: Candle[], n: number, mult: number): (1 | -1 | null)[] {
   const out: (1 | -1 | null)[] = cs.map(() => null);
@@ -153,6 +182,24 @@ export function snapshotOf(cs: Candle[], ic: Config["indicators"]): TfSnapshot {
 export class IndicatorLookup {
   private cache = new Map<string, Record<string, TfSnapshot> | null>();
   constructor(private readonly db: Db, private readonly ic: Config["indicators"]) {}
+
+  /** The last `bars` complete candles of a timeframe at t (5m stored, others aggregated), oldest first. */
+  candles(pool: string, t: number, timeframe: string, bars: number): Candle[] {
+    const tf = TF_MS[timeframe];
+    if (!tf) return [];
+    const k = `c|${pool}|${timeframe}|${bars}|${Math.floor(t / TF_MS["5m"])}`;
+    const hit = this.candleCache.get(k);
+    if (hit) return hit;
+    const rows = this.db.all<Candle>(
+      "SELECT ts, o, h, l, c FROM ohlcv WHERE pool = ? AND timeframe = '5m' AND ts >= ? AND ts + 300000 <= ? ORDER BY ts", pool, t - (bars + 2) * tf, t,
+    ).filter((r) => r.c !== null && r.h !== null && r.l !== null);
+    const out = (timeframe === "5m" ? rows : aggregate(rows, TF_MS["5m"], tf).filter((x) => x.ts + tf <= t)).slice(-bars);
+    if (this.candleCache.size > 20_000) this.candleCache.clear();
+    this.candleCache.set(k, out);
+    return out;
+  }
+
+  private candleCache = new Map<string, Candle[]>();
 
   at(pool: string, t: number): Record<string, TfSnapshot> | null {
     const b = Math.floor(t / TF_MS["5m"]);

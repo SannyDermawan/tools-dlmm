@@ -195,7 +195,7 @@ export function groupComparison(db: Db, sessionIds: string[]): { groups: GroupRo
      FROM sim_positions p JOIN sim_results r USING(position_id)
      WHERE p.session_id IN (${ph}) AND p.status = 'closed'
      GROUP BY p.entry_mode
-     ORDER BY CASE p.entry_mode WHEN 'all_pools_baseline' THEN 0 WHEN 'meridian_preset' THEN 1 WHEN 'friday_scalp' THEN 2 WHEN 'yunus_flip' THEN 3 ELSE 4 END, p.entry_mode`,
+     ORDER BY CASE p.entry_mode WHEN 'all_pools_baseline' THEN 0 WHEN 'meridian_preset' THEN 1 WHEN 'friday_scalp' THEN 2 WHEN 'yunus_flip' THEN 3 WHEN 'evil_panda' THEN 4 ELSE 5 END, p.entry_mode`,
     ...sessionIds,
   );
   const selection: SelectionRow[] = [];
@@ -230,12 +230,12 @@ export function groupComparisonMarkdown(g: { groups: GroupRow[]; selection: Sele
   out.push("");
   out.push("Statistics use clean positions only (no data gap during the position).");
   out.push("");
-  out.push("Each group uses its own strategies (meridian_preset / friday_scalp / yunus_flip: one fixed preset each; baseline and signal modes: the grid sample), so the table above mixes pool choice and strategy. The pool-selection effect below compares **identical baseline grid positions** in the pools a group picked vs in all pools of the same cohorts:");
+  out.push("Each group uses its own strategies (meridian_preset / friday_scalp / yunus_flip / evil_panda: one fixed preset each; baseline and signal modes: the grid sample), so the table above mixes pool choice and strategy. The pool-selection effect below compares **identical baseline grid positions** in the pools a group picked vs in all pools of the same cohorts:");
   out.push("");
   if (g.selection.length) {
     out.push("| selector | baseline positions in picked pools | avg net % | baseline positions (same cohorts) | avg net % | difference (pp) |\n|---|--:|--:|--:|--:|--:|");
     for (const s of g.selection) out.push(`| ${s.selector} | ${s.selectedN} | ${f(s.selectedNet)} | ${s.allN} | ${f(s.allNet)} | ${f(s.diff)} |`);
-  } else out.push("No selector entries (meridian_preset / friday_scalp / yunus_flip / signal modes) in these sessions.");
+  } else out.push("No selector entries (meridian_preset / friday_scalp / yunus_flip / evil_panda / signal modes) in these sessions.");
   if (g.groups.some((r) => r.group === "meridian_preset" && r.partial > 0)) {
     out.push("");
     out.push("Some meridian_preset positions ran as **preset_parsial**: a filter had no data (organic score / bot holders need the Jupiter audit, phase 10) and was skipped.");
@@ -246,7 +246,7 @@ export function groupComparisonMarkdown(g: { groups: GroupRow[]; selection: Sele
   }
   if (g.groups.some((r) => r.group === "yunus_flip")) {
     out.push("");
-    out.push("yunus_flip runs the Yunus / EvilPanda flip cycle: a bid-ask quote-only position below the price, held until it is fully converted to the token, then redeployed base-only above. Cycles that were still open at the session end are closed there (censored): read the close reasons and the Yunus section, not only this average.");
+    out.push("yunus_flip runs the Yunus flip cycle (built from tweet summaries; not the Meridian fork's evil_panda, which runs as its own mode): a bid-ask quote-only position below the price, held until it is fully converted to the token, then redeployed base-only above. Cycles that were still open at the session end are closed there (censored): read the close reasons and the Yunus section, not only this average.");
   }
   return out.join("\n");
 }
@@ -317,7 +317,7 @@ export function entryFilterMarkdown(db: Db, simSessionId: string): string {
   const rows = db.all<{ mode: string; filter: string; n: number; win: number | null; net: number | null }>(
     `SELECT p.entry_mode mode, COALESCE(p.entry_filter, 'none') filter, COUNT(*) n, AVG(r.net_pnl_usd > 0) win, AVG(r.net_pnl_pct) net
      FROM sim_positions p JOIN sim_results r USING(position_id)
-     WHERE p.session_id = ? AND p.status = 'closed' AND p.gap_tainted = 0 AND p.entry_mode NOT IN ('meridian_preset', 'friday_scalp', 'yunus_flip')
+     WHERE p.session_id = ? AND p.status = 'closed' AND p.gap_tainted = 0 AND p.entry_mode NOT IN ('meridian_preset', 'friday_scalp', 'yunus_flip', 'evil_panda')
      GROUP BY p.entry_mode, filter ORDER BY p.entry_mode, filter != 'none', filter`,
     simSessionId,
   );

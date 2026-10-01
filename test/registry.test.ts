@@ -19,10 +19,10 @@ describe("strategy registry (roadmap PHASE 1)", () => {
     const ids = reg.sources.map((s) => s.id);
     expect(ids).toEqual(expect.arrayContaining(["yunus-0x/meridian", "fciaf420/meridian", "irfndi/prism-liquidity-agent", "DeltaLogicLabs/Mantis", "hummingbot/hummingbot"]));
     expect(reg.sources.find((s) => s.id === "fciaf420/meridian")!.relation).toContain("fork");
-    // evil_panda exists only in the fork, and is not our yunus_flip
+    // evil_panda exists only in the fork, and is not our yunus_flip: it runs as its own entry mode
     const ep = reg.strategies.find((s) => s.id === "evil_panda")!;
     expect(ep.source.url).toContain("fciaf420/meridian");
-    expect(ep.status).toBe("candidate");
+    expect(ep).toMatchObject({ status: "implemented", entry_mode: "evil_panda" });
     expect(reg.strategies.find((s) => s.id === "yunus_flip")!.notes.join(" ")).toMatch(/NOT Meridian's evil_panda/);
   });
 
@@ -65,8 +65,8 @@ describe("strategy registry (roadmap PHASE 1)", () => {
 
     it("an entry mode on a strategy that is only a candidate", () => {
       const r = clone();
-      first(r, "evil_panda").entry_mode = "yunus_flip";
-      expect(checkRegistry(r, modes).join("|")).toContain("evil_panda: entry_mode on a strategy that is not implemented");
+      first(r, "prism_fallen_angel").entry_mode = "yunus_flip";
+      expect(checkRegistry(r, modes).join("|")).toContain("prism_fallen_angel: entry_mode on a strategy that is not implemented");
     });
 
     it("an external strategy read from code needs a URL, one built from a summary does not", () => {
@@ -81,8 +81,8 @@ describe("strategy registry (roadmap PHASE 1)", () => {
       first(r, "yunus_flip").fidelity = "faithful";
       expect(checkRegistry(r, modes).join("|")).toContain("yunus_flip: cannot be faithful to a summary");
       const r2 = clone();
-      first(r2, "evil_panda").fidelity = "faithful";
-      expect(checkRegistry(r2, modes).join("|")).toContain("evil_panda: fidelity faithful but not implemented");
+      first(r2, "prism_fallen_angel").fidelity = "faithful";
+      expect(checkRegistry(r2, modes).join("|")).toContain("prism_fallen_angel: fidelity faithful but not implemented");
     });
   });
 });
@@ -133,6 +133,12 @@ describe("strategy decomposition (roadmap PHASE 2)", () => {
     expect(dev("yunus_flip", "position_size")).toBe("unknown");
     // Meridian's source was read, so nothing there is unknown
     for (const c of COMPONENTS) expect(dev("meridian_preset", c)).not.toBe("unknown");
+    // Evil Panda: side, range and rebalance as in the fork's code; sizing and re-entry are ours
+    expect(dev("evil_panda", "side")).toBe("none");
+    expect(dev("evil_panda", "range")).toBe("none");
+    expect(dev("evil_panda", "position_size")).toBe("major");
+    expect(dev("evil_panda", "reentry")).toBe("major");
+    for (const c of COMPONENTS) expect(dev("evil_panda", c)).not.toBe("unknown");
   });
 
   describe("checkRegistry enforces the decomposition rules", () => {
@@ -141,8 +147,8 @@ describe("strategy decomposition (roadmap PHASE 2)", () => {
       first(r, "meridian_preset").components.exit.deviation = "n/a";
       expect(checkRegistry(r, modes).join("|")).toContain("meridian_preset.exit: implemented external strategy needs a deviation other than n/a");
       const r2 = clone();
-      first(r2, "evil_panda").components.exit.deviation = "minor";
-      expect(checkRegistry(r2, modes).join("|")).toContain("evil_panda.exit: deviation minor but there is nothing to compare");
+      first(r2, "prism_fallen_angel").components.exit.deviation = "minor";
+      expect(checkRegistry(r2, modes).join("|")).toContain("prism_fallen_angel.exit: deviation minor but there is nothing to compare");
       const r3 = clone();
       first(r3, "all_pools_baseline").components.entry.deviation = "none";
       expect(checkRegistry(r3, modes).join("|")).toContain("all_pools_baseline.entry: deviation none but there is nothing to compare");
@@ -180,11 +186,13 @@ describe("strategy decomposition (roadmap PHASE 2)", () => {
 
   it("one component across strategies shows original and implemented side by side, filtered by status", () => {
     const md = registryComponentMarkdown(reg, "exit");
-    expect(md).toContain("## evil_panda (candidate, deviation n/a)");
+    expect(md).toContain("## prism_fallen_angel (candidate, deviation n/a)");
+    expect(md).toContain("## evil_panda (implemented, deviation minor)");
     expect(md).toContain("RSI(2) > 90");
     expect(md).toContain("## meridian_preset (implemented, deviation minor)");
     const only = registryComponentMarkdown(reg, "exit", { status: "implemented" });
-    expect(only).not.toContain("## evil_panda");
+    expect(only).not.toContain("## prism_fallen_angel");
+    expect(only).toContain("## evil_panda");
     expect(only).toContain("## friday_scalp");
   });
 
@@ -192,7 +200,8 @@ describe("strategy decomposition (roadmap PHASE 2)", () => {
     const all = registryMarkdown(reg);
     for (const s of reg.strategies) expect(all).toContain(`| ${s.id} |`);
     const cand = registryMarkdown(reg, { status: "candidate" });
-    expect(cand).toContain("| evil_panda |");
+    expect(cand).toContain("| prism_fallen_angel |");
+    expect(cand).not.toContain("| evil_panda |");
     expect(cand).not.toContain("| all_pools_baseline |");
     const one = registryMarkdown(reg, { id: "yunus_flip" });
     expect(one).toContain("| component | deviation | original | implemented | reason |");

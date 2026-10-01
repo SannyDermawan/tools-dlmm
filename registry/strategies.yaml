@@ -264,22 +264,22 @@ strategies:
   - id: evil_panda
     name: Evil Panda (Meridian fork policy)
     kind: external
-    status: candidate
-    entry_mode: null
+    status: implemented
+    entry_mode: evil_panda
     source: { name: "fciaf420/meridian prompt.js, tools/dlmm.js, config.js (evilPanda block)", url: "https://github.com/fciaf420/meridian", verified: source_code }
-    fidelity: not_implemented
+    fidelity: interpretation
     components:
-      entry: { original: "Token 24 h volume >= $750k, market cap >= $200k and a green 5-minute Supertrend with the price above it (GMGN data); otherwise skip (hard skip in code).", implemented: "Not implemented.", deviation: n/a }
-      filter: { original: "The Meridian screen plus token fees >= 30 SOL and top 10 real holders <= 60 %.", implemented: "Not implemented.", deviation: n/a }
-      side: { original: "Single-sided SOL (amount_y only); two-sided spot and bid-ask are refused by deploy_position.", implemented: "Not implemented.", deviation: n/a }
-      range: { original: "Spot, price_range_pct 80, bins_above 0, at least that range.", implemented: "Not implemented.", deviation: n/a }
-      position_size: { original: "Meridian sizing: min(50 SOL, 35 % of (total - 0.2 SOL gas reserve)), floor 0.5 SOL.", implemented: "Not implemented.", deviation: n/a }
-      exit: { original: "Close only while PnL is positive and 5-minute RSI(2) > 90 with the close above the Bollinger upper band or the first green MACD histogram; the other Meridian exits still apply.", implemented: "Not implemented.", deviation: n/a }
-      reentry: { original: "The next screener cycle may pick the pool again; nothing specific to the policy.", implemented: "Not implemented.", deviation: n/a }
-      rebalance: { original: "None specified.", implemented: "Not implemented.", deviation: n/a }
-      transaction_policy: { original: "Meridian's: priority fee Medium, an 80 % range needs several transactions at bin step 100.", implemented: "Not implemented.", deviation: n/a }
+      entry: { original: "Token 24 h volume >= $750k, market cap >= $200k and a green 5-minute Supertrend with the price above it (GMGN data); otherwise skip (hard skip in code).", implemented: "Same thresholds; the token 24 h volume and market cap come from the Jupiter audit, the Supertrend (period 10, multiplier 3) from our own 5-minute OHLCV, direction up on the last complete candle.", deviation: minor, reason: "Other data sources than GMGN; the fork does not state its Supertrend parameters.", where: "presets/evil_panda.yaml screen, src/strategies/evilPanda.ts evaluateEvilPanda" }
+      filter: { original: "The Meridian screen plus token fees >= 30 SOL and top 10 real holders <= 60 %.", implemented: "Our Meridian preset screen (presets/meridian.yaml) must pass, plus token fees >= 30 SOL (Jupiter audit) and top-10 holders <= 60 % (our security row).", deviation: minor, reason: "Our Meridian screen drops the LLM pick and narrative check (see meridian_preset); our top-10 share is not filtered for LP and exchange wallets.", where: "src/strategies/evilPanda.ts" }
+      side: { original: "Single-sided SOL (amount_y only); two-sided spot and bid-ask are refused by deploy_position.", implemented: "Quote-only below the price; the token must be the base X so that the quote side is SOL.", deviation: none, where: "presets/evil_panda.yaml range" }
+      range: { original: "Spot, price_range_pct 80, bins_above 0, at least that range.", implemented: "Spot, 80 % below the price, bins above 0 (bins from the pool's bin step).", deviation: none, where: "presets/evil_panda.yaml range" }
+      position_size: { original: "Meridian sizing: min(50 SOL, 35 % of (total - 0.2 SOL gas reserve)), floor 0.5 SOL.", implemented: "The session's virtual capital per position ($1000 by default; capital profiles $40-$100).", deviation: major, reason: "Every entry mode is compared at the same virtual size; sizing is a capital question (dlmm capital), not part of the entry." }
+      exit: { original: "Close only while PnL is positive and 5-minute RSI(2) > 90 with the close above the Bollinger upper band or the first green MACD histogram; the other Meridian exits still apply.", implemented: "Same confluence on our complete 5-minute candles (RSI 2 > 90, Bollinger 20 / 2, MACD 12 / 26 / 9 histogram turning green) while net PnL > 0; our Meridian preset's exit policy runs as well.", deviation: minor, reason: "Candles from our OHLCV instead of GMGN; Meridian's other exits are our preset's version.", where: "src/strategies/evilPanda.ts evaluateExit" }
+      reentry: { original: "The next screener cycle may pick the pool again; nothing specific to the policy.", implemented: "One position at a time per pool; a new one 15 min after the close, at most 3 per pool and session.", deviation: major, reason: "The source has no rule; a screener cycle is our re-entry tick." }
+      rebalance: { original: "None specified.", implemented: "None.", deviation: none }
+      transaction_policy: { original: "Meridian's: priority fee Medium, an 80 % range needs several transactions at bin step 100.", implemented: "Our cost model: priority fee percentile, an 80 % range at bin step 100 is about 161 bins = 3 transactions per open and close.", deviation: minor, reason: "Our priority-fee model, not Meridian's Medium setting." }
     notes:
-      - "To test it we need Supertrend (we have supertrendSeries), RSI(2) (rsiSeries), Bollinger (pctBSeries), MACD (missing) and token 24 h volume (token_audit.volume_24h_usd) instead of GMGN's."
+      - "Runs as entry mode evil_panda through the standard strategy interface (src/strategies, roadmap PHASE 3); its exit is the first module-specific evaluateExit."
       - "The author's own claim in the prompt (spot without a SOL split -10.75 %, with split +7.48 % at 73 % wins) comes from his lessons file, unverified."
     transaction_profile: { churn: low, notes: "One position at a time per pool; exit only on the indicator confluence while in profit." }
     capital_sensitivity: { fixed_cost_exposure: low, notes: "Few transactions; an 80 % wide single-sided range needs about 160 bins at bin step 100 -> several transactions." }

@@ -2,16 +2,22 @@ import type { Config } from "../config/schema.ts";
 import type { Logger } from "../util/logger.ts";
 import type { PoolSimulator } from "./engine.ts";
 import type { PositionSpec, VirtualPosition } from "./position.ts";
-import { baseFeePct, evaluateFriday, FRIDAY_NOT_YET, fridayExitPolicy, loadFridayPreset, type FridayInputs, type FridayPreset } from "./friday.ts";
-import { evaluateMeridian, feeWindowMinutes, loadMeridianPreset, meridianExitPolicy, type MeridianPreset, type PresetEvaluation, type PresetInputs } from "./meridian.ts";
-import { FRIDAY_CONFIRM, flowConfirm, flowTriggers, netBuyUsd, type FlowSnapshot } from "./flow.ts";
+import { loadFridayPreset, type FridayInputs, type FridayPreset } from "./friday.ts";
+import { loadMeridianPreset, type MeridianPreset, type PresetInputs } from "./meridian.ts";
+import { FRIDAY_CONFIRM, flowConfirm, flowTriggers, type FlowSnapshot } from "./flow.ts";
 import { expandExitPolicies, exitPolicyLabel, flowExitOf, isPnlPolicy, newTrailing, oorRule, pnlDecision, type TrailingState } from "./policies.ts";
 import type { SignalBook } from "../signals/signalEngine.ts";
 import type { ExitEngine } from "../signals/exitEngine.ts";
 import { binsForRangePct, binsForUpPct, downsidePct, upsidePct } from "./distribution.ts";
 import { entryFilterPass, type EntryFilter, type TfSnapshot } from "../features/indicators.ts";
 import { athDrawdownPct } from "../features/ath.ts";
-import { evaluateYunus, loadYunusPreset, yunusCombos, yunusDownside, type YunusCombo, type YunusPreset } from "./yunus.ts";
+import { loadYunusPreset, type YunusCombo, type YunusPreset } from "./yunus.ts";
+import type { EntryTrigger, EntryVerdict, ModeStats, PreviousCycle, ReentryVerdict, StrategyModule } from "../strategies/types.ts";
+import { meridianModule } from "../strategies/meridian.ts";
+import { flowDetail, fridayModule } from "../strategies/friday.ts";
+import { yunusModule } from "../strategies/yunus.ts";
+import { evilPandaModule, loadEvilPandaPreset, type EvilPandaPreset } from "../strategies/evilPanda.ts";
+import type { Candle } from "../features/indicators.ts";
 import type { Regime } from "../features/regime.ts";
 
 export type SessionPhase = "warmup" | "active" | "closing" | "ended";
@@ -65,9 +71,9 @@ export class SessionClock {
 export { exitPolicyLabel };
 
 /** Entry modes that need the decision stack (signals / preset inputs) — skipped without it. */
-const SIGNAL_MODES = new Set(["signal_enter", "signal_watch", "meridian_preset", "friday_scalp", "yunus_flip"]);
+const SIGNAL_MODES = new Set(["signal_enter", "signal_watch", "meridian_preset", "friday_scalp", "yunus_flip", "evil_panda"]);
 /** Entry modes that open their own fixed preset position instead of the grid combinations. */
-const PRESET_MODES = new Set(["meridian_preset", "friday_scalp", "yunus_flip"]);
+const PRESET_MODES = new Set(["meridian_preset", "friday_scalp", "yunus_flip", "evil_panda"]);
 /** Entry modes that run with and without the pool cooldown (grid.cooldown_enabled). */
 const COOLDOWN_MODES = new Set(["signal_enter", "signal_watch"]);
 
@@ -177,17 +183,6 @@ export function gridCombos(c: Config, opts: { allowSignalModes?: boolean; sessio
   return out;
 }
 
-/** Compact flow values for the journal (entry and exit decisions). */
-function flowDetail(x: FlowSnapshot) {
-  const r = (v: number | null | undefined) => (v === null || v === undefined ? null : Math.round(v * 100) / 100);
-  return {
-    volume: x.minutes.slice(0, 3).map((m) => r(m.volumeUsd)),
-    netBuy: r(netBuyUsd(x.minutes[0], x.riskIsX)),
-    holders: x.holders,
-    bundlerPct: x.bundlerPct ? { now: r(x.bundlerPct.now), prev: r(x.bundlerPct.prev) } : null,
-  };
-}
-
 export interface GridStats {
   cohorts: number;
   requested: number;
@@ -204,6 +199,8 @@ export interface GridStats {
   friday: { evaluated: number; opened: number; reentries: number; failed: Record<string, number> };
   /** Yunus flip entries: combinations screened, cycles opened (first + re-entries), flips done, cycles completed, screen failures */
   yunus: { evaluated: number; opened: number; reentries: number; flips: number; cycles: number; failed: Record<string, number> };
+  /** Evil Panda entries (Meridian fork): pools screened, positions opened (first + re-entries), screen failures */
+  evilPanda: { evaluated: number; opened: number; reentries: number; failed: Record<string, number> };
   /** signal-mode positions not opened because the pool was in cooldown (phase 10) */
   cooldownSkips: number;
   /** pool entries that waited for fresh price data (cohort time fell into a data gap) */
@@ -244,7 +241,9 @@ export interface GridSignals {
     pdTimeframe?: string | null; pdVolatility?: number | null; pdPriceChangePct?: number | null; pdNetDepositsUsd?: number | null;
     pdUniqueTraders?: number | null; pdSwapCount?: number | null; pdCriticalWarning?: boolean | null;
     /** market regime at entry (roadmap PHASE 6, src/features/regime.ts) and its context features */
-    regime?: Regime | null; regime5m?: Regime | null; volumeAccel?: number | null; holdersChangePct?: number | null; feeActiveTvlPct?: number | null } | null;
+    regime?: Regime | null; regime5m?: Regime | null; volumeAccel?: number | null; holdersChangePct?: number | null; feeActiveTvlPct?: number | null;
+    /** the risk token's 24 h volume across venues (Jupiter audit) */
+    volume24hUsd?: number | null } | null;
   /** highest price (pool quote units) seen up to t, only for pools whose risk token is the base (ath_drawdown_pct) */
   ath?: (pool: string, t: number) => number | null;
   /** one-minute flow of a pool at t (flow exits, Friday entry confirmation) */
@@ -255,6 +254,20 @@ export interface GridSignals {
   friday?: FridayPreset;
   /** preset override (tests); default: loaded from config presets.yunus */
   yunus?: YunusPreset;
+  /** preset override (tests); default: loaded from config presets.evil_panda */
+  evilPanda?: EvilPandaPreset;
+  /** the last `bars` complete candles of a pool at t (look-ahead safe; Evil Panda's Supertrend and exit indicators) */
+  candles?: (pool: string, t: number, timeframe: string, bars: number) => Candle[];
+}
+
+/** The module's transaction estimate of a cycle, journaled so the report can hold it against the operations it paid. */
+const txEstimateJournal = (e: { min: number; max: number; txPerOperation: number }) => ({ tx_est_min: e.min, tx_est_max: e.max, tx_per_operation: e.txPerOperation });
+
+/** A plan of a strategy module that may open now, with its previous cycle. */
+interface Due {
+  key: string;
+  prev: PreviousCycle | null;
+  rv: ReentryVerdict;
 }
 
 /** Per-position runtime state of the PnL policies and variants. */
@@ -289,16 +302,18 @@ export class GridRunner {
   readonly combos: PositionSpec[];
   readonly preset: MeridianPreset | null = null;
   readonly friday: FridayPreset | null = null;
-  /** friday_scalp trades per pool (count, last close / open time) */
-  private readonly fridayTrades = new Map<string, { n: number; positionId: string }>();
   readonly yunus: YunusPreset | null = null;
   readonly yunusCombos: YunusCombo[] = [];
-  /** yunus_flip cycles per pool and combination */
-  private readonly yunusTrades = new Map<string, { n: number; positionId: string }>();
+  readonly evilPanda: EvilPandaPreset | null = null;
+  /** preset entry modes as standard strategy modules (roadmap PHASE 3), run by openModule in this order */
+  readonly modules: StrategyModule[] = [];
+  private readonly moduleByMode = new Map<string, StrategyModule>();
+  /** cycles per entry mode, pool and plan key: count and the latest position */
+  private readonly cycles = new Map<string, { n: number; positionId: string }>();
   readonly stats: GridStats = {
     cohorts: 0, requested: 0, skippedPools: 0, rebalances: 0, policyExits: 0, rebalanceNotWorth: 0, signalEntries: {}, pnlExits: {},
     variantActions: { partial_harvest: 0, fee_compounding: 0, single_sided_reseed: 0 },
-    preset: { evaluated: 0, passed: 0, opened: 0, partial: 0, failed: {} }, friday: { evaluated: 0, opened: 0, reentries: 0, failed: {} }, yunus: { evaluated: 0, opened: 0, reentries: 0, flips: 0, cycles: 0, failed: {} }, cooldownSkips: 0, filterSkips: {}, deferredEntries: 0, widthSkips: 0, events: { detected: 0, opened: 0, skipped: {} }, capped: false,
+    preset: { evaluated: 0, passed: 0, opened: 0, partial: 0, failed: {} }, friday: { evaluated: 0, opened: 0, reentries: 0, failed: {} }, yunus: { evaluated: 0, opened: 0, reentries: 0, flips: 0, cycles: 0, failed: {} }, evilPanda: { evaluated: 0, opened: 0, reentries: 0, failed: {} }, cooldownSkips: 0, filterSkips: {}, deferredEntries: 0, widthSkips: 0, events: { detected: 0, opened: 0, skipped: {} }, capped: false,
   };
   /** latest signal action per pool at the previous scoring round (rising-edge detection) */
   private readonly lastAction = new Map<string, string | null>();
@@ -335,10 +350,39 @@ export class GridRunner {
     if (signals && c.grid.entry_modes.includes("yunus_flip")) {
       try {
         this.yunus = signals.yunus ?? loadYunusPreset(c.presets.yunus);
-        this.yunusCombos = yunusCombos(this.yunus, exitPolicyLabel);
       } catch (e) {
         log?.error({ err: (e as Error).message, path: c.presets.yunus }, "yunus preset not loaded; entry mode skipped");
       }
+    }
+    if (signals && c.grid.entry_modes.includes("evil_panda")) {
+      try {
+        this.evilPanda = signals.evilPanda ?? loadEvilPandaPreset(c.presets.evil_panda);
+      } catch (e) {
+        log?.error({ err: (e as Error).message, path: c.presets.evil_panda }, "evil panda preset not loaded; entry mode skipped");
+      }
+    }
+    if (signals) {
+      const env = { c, signals };
+      if (this.preset) this.modules.push(meridianModule(this.preset, env));
+      if (this.friday) this.modules.push(fridayModule(this.friday, env));
+      if (this.yunus) {
+        const y = yunusModule(this.yunus, env);
+        this.yunusCombos = y.combos;
+        if (y.combos.length) this.modules.push(y);
+      }
+      if (this.evilPanda) {
+        // the Meridian screen and exits of the fork: the loaded Meridian preset, or the file when that mode is off
+        let mer = this.preset;
+        if (!mer && this.evilPanda.screen.meridian_screen) {
+          try {
+            mer = signals.preset ?? loadMeridianPreset(c.presets.meridian);
+          } catch {
+            mer = null;
+          }
+        }
+        this.modules.push(evilPandaModule(this.evilPanda, mer, env));
+      }
+      for (const m of this.modules) this.moduleByMode.set(m.entryMode, m);
     }
     this.nextCohortAt = clock.warmupEnd;
   }
@@ -353,10 +397,8 @@ export class GridRunner {
       this.lastEval = ts;
       this.evaluate(ts);
       this.retryPendingEvents(ts);
-      // Friday playbook: a new scalp in a pool reentry.minutes after the previous one closed
-      if (this.friday && this.cohort > 0 && this.clock.phase(ts) === "active") this.openFriday(ts, this.cohort, true);
-      // Yunus playbook: a new cycle after the previous one closed (cooldown, cycle cap)
-      if (this.yunus && this.cohort > 0 && this.clock.phase(ts) === "active") this.openYunus(ts, this.cohort, true);
+      // strategy modules between cohorts: Friday's next scalp, Yunus' next cycle (each module's re-entry rule)
+      if (this.cohort > 0 && this.clock.phase(ts) === "active") for (const m of this.modules) this.openModule(m, ts, this.cohort, "reentry");
     }
     this.openDeferred(ts);
     if (this.clock.phase(ts) !== "active" || ts < this.nextCohortAt) return;
@@ -385,9 +427,8 @@ export class GridRunner {
   private openCohort(ts: number) {
     this.cohort++;
     this.stats.cohorts++;
-    let opened = this.openPreset(ts);
-    opened += this.openFriday(ts, this.cohort, false);
-    opened += this.openYunus(ts, this.cohort, false);
+    let opened = 0;
+    for (const m of this.modules) opened += this.openModule(m, ts, this.cohort, "cohort");
     for (const sim of this.sims.values()) {
       if (!sim.ready) {
         // no data yet (e.g. a pool added during the session): enter once its data is complete
@@ -421,8 +462,7 @@ export class GridRunner {
       if (!sim || !sim.ready || sim.priceStale(ts)) continue;
       this.deferred.delete(pool);
       if (this.openPool(sim, ts, cohort)) return;
-      this.openFriday(ts, cohort, false, pool);
-      this.openYunus(ts, cohort, false, pool);
+      for (const m of this.modules) this.openModule(m, ts, cohort, "deferred", pool);
     }
   }
 
@@ -578,211 +618,93 @@ export class GridRunner {
   }
 
   /**
-   * meridian_preset: screen every ready pool with the Meridian defaults, rank the passing ones and
-   * open the preset position in the top N. Token filters without data -> preset_partial.
+   * One strategy module (roadmap PHASE 3) over the ready pools: its re-entry rule picks the plans
+   * that may open now, its screen decides the pool, its range gives each plan's position; ranked
+   * modules (Meridian) open only their top N passing pools. The runner only books the result:
+   * stats per check, width and position caps, the journal and the cycle count per plan.
    */
-  private openPreset(ts: number): number {
-    const pr = this.preset;
-    const inputs = this.signals?.presetInputs;
-    if (!pr || !inputs) return 0;
-    const win = feeWindowMinutes(pr);
-    const passing: { sim: PoolSimulator; ev: PresetEvaluation }[] = [];
-    for (const sim of this.sims.values()) {
-      if (!sim.ready || sim.priceStale(ts)) continue;
-      const x = inputs(sim.meta.pool, ts, sim, win);
-      if (!x) continue;
-      this.stats.preset.evaluated++;
-      const ev = evaluateMeridian(pr, x);
-      if (ev.pass) passing.push({ sim, ev });
-      else for (const k of ev.failed) this.stats.preset.failed[k] = (this.stats.preset.failed[k] ?? 0) + 1;
-    }
-    this.stats.preset.passed += passing.length;
-    passing.sort((a, b) => b.ev.score - a.ev.score);
-    const exitPolicy = meridianExitPolicy(pr);
-    const s = pr.strategy;
-    let opened = 0;
-    for (const [i, { sim, ev }] of passing.slice(0, pr.ranking.top_n).entries()) {
-      if (this.full()) break;
-      const sig = this.signals?.book.latestFor(sim.meta.pool, ts) ?? null;
-      const binsBelow = s.sides === "base_only" ? 0 : s.bins_below;
-      const binsAbove = s.sides === "two_sided" ? s.bins_below : 0;
-      const partial = ev.missing.length > 0;
-      this.requestPos(
-        sim,
-        {
-          strategy: s.shape, sides: s.sides, binsBelow, binsAbove, exitPolicy, variant: "none",
-          entryMode: "meridian_preset", capitalUsd: this.c.simulation.virtual_capital_usd,
-          cohort: this.cohort, signalId: sig?.signal_id ?? null,
-          combo: {
-            entry_mode: "meridian_preset", strategy: s.shape, bins_per_side: s.bins_below, sides: s.sides,
-            exit_policy: exitPolicyLabel(exitPolicy), variant: "none", cohort: this.cohort,
-            preset_partial: partial, preset_missing: ev.missing, preset_score: ev.score, preset_rank: i + 1,
-            signal_action: sig?.action ?? null, signal_score: sig?.final_score ?? null,
-          },
-        },
-        ts,
-      );
-      this.stats.requested++;
-      this.stats.preset.opened++;
-      if (partial) this.stats.preset.partial++;
-      this.stats.signalEntries.meridian_preset = (this.stats.signalEntries.meridian_preset ?? 0) + 1;
-      opened++;
-    }
-    return opened;
-  }
-
-  /**
-   * friday_scalp: one Spot two-sided position (34 + 1 + 34 bins) with the scalp exit (time stop 15
-   * min, out of range) in every pool passing Friday's screen. At a cohort every passing pool without
-   * an open scalp gets one; between cohorts (`reentry`) a pool gets the next one reentry.minutes
-   * after its previous scalp closed, up to max_trades_per_pool. Flow confirmation / flow exits are
-   * stage 2: positions are flagged preset_partial.
-   */
-  private openFriday(ts: number, cohortNo: number, reentry: boolean, only?: string): number {
-    const pr = this.friday;
-    const inputs = this.signals?.fridayInputs;
-    if (!pr || !inputs) return 0;
+  private openModule(mod: StrategyModule, ts: number, cohortNo: number, trigger: EntryTrigger, only?: string): number {
+    const st = this.stats[mod.statsKey] as ModeStats;
+    const ranked: { sim: PoolSimulator; verdict: EntryVerdict; due: Due[] }[] = [];
     let opened = 0;
     for (const sim of this.sims.values()) {
       if (only && sim.meta.pool !== only) continue;
       if (!sim.ready || sim.priceStale(ts)) continue;
-      const prev = this.fridayTrades.get(sim.meta.pool);
-      if (prev) {
-        const p = sim.get(prev.positionId);
-        if (p && (p.status === "active" || p.status === "pending")) continue; // one scalp at a time
-        if (prev.n >= pr.reentry.max_trades_per_pool) continue;
-        const since = p?.closedAt ?? p?.requestedAt ?? 0;
-        if (reentry && ts - since < pr.reentry.minutes * 60_000) continue;
-      } else if (reentry && !pr.entry_confirm.enabled) continue; // without a confirmation: first entries at cohorts
-      const x = inputs(sim.meta.pool, ts);
-      if (!x) continue;
-      this.stats.friday.evaluated++;
-      const failed = evaluateFriday(pr, sim.meta, x, ts);
-      // step 2 "confirm entry": volume rising, net buy > 0, holders growing, bundlers stable
-      let confirm: ReturnType<typeof flowConfirm> | null = null;
-      let snap: FlowSnapshot | null = null;
-      if (!failed.length && pr.entry_confirm.enabled) {
-        snap = this.signals?.flow?.(sim.meta.pool, ts) ?? null;
-        confirm = snap ? flowConfirm(snap, pr.entry_confirm) : { pass: false, failed: ["flow:missing"], missing: [] };
-        for (const f of confirm.failed) failed.push(`confirm:${f}`);
+      const due: Due[] = [];
+      for (const key of mod.planKeys(sim)) {
+        const c = this.cycles.get(`${mod.entryMode}|${sim.meta.pool}|${key}`);
+        const prev: PreviousCycle | null = c ? { n: c.n, position: sim.get(c.positionId) } : null;
+        const rv = mod.evaluateReentry(prev, ts, trigger);
+        if (rv.ok) due.push({ key, prev, rv });
       }
-      if (failed.length) {
-        for (const f of failed) this.stats.friday.failed[f] = (this.stats.friday.failed[f] ?? 0) + 1;
+      if (!due.length) continue;
+      const verdict = mod.evaluateEntry(sim, ts, trigger);
+      if (!verdict) continue;
+      st.evaluated++;
+      if (verdict.failed.length) {
+        for (const f of verdict.failed) st.failed[f] = (st.failed[f] ?? 0) + 1;
         continue;
       }
-      if (this.full()) break;
-      const s = pr.strategy;
-      const exitPolicy = fridayExitPolicy(pr);
-      const sig = this.signals?.book.latestFor(sim.meta.pool, ts) ?? null;
-      const n = (prev?.n ?? 0) + 1;
+      if (mod.rankTopN !== undefined) {
+        ranked.push({ sim, verdict, due });
+        continue;
+      }
+      const r = this.openPlans(mod, st, sim, ts, cohortNo, trigger, verdict, due, null);
+      opened += r.opened;
+      if (r.full) return opened;
+    }
+    if (mod.rankTopN !== undefined) {
+      if (st.passed !== undefined) st.passed += ranked.length;
+      ranked.sort((a, b) => (b.verdict.score ?? 0) - (a.verdict.score ?? 0));
+      for (const [i, x] of ranked.slice(0, mod.rankTopN).entries()) {
+        const r = this.openPlans(mod, st, x.sim, ts, cohortNo, trigger, x.verdict, x.due, i + 1);
+        opened += r.opened;
+        if (r.full) break;
+      }
+    }
+    return opened;
+  }
+
+  private openPlans(
+    mod: StrategyModule, st: ModeStats, sim: PoolSimulator, ts: number, cohortNo: number, trigger: EntryTrigger,
+    verdict: EntryVerdict, due: Due[], rank: number | null,
+  ): { opened: number; full: boolean } {
+    const sig = this.signals?.book.latestFor(sim.meta.pool, ts) ?? null;
+    let opened = 0;
+    for (const d of due) {
+      const n = (d.prev?.n ?? 0) + 1;
+      const plan = mod.calculateRange(sim, ts, { key: d.key, n, hasPrevious: !!d.prev, trigger, verdict, rank });
+      if ("skip" in plan) {
+        st.failed[plan.skip] = (st.failed[plan.skip] ?? 0) + 1;
+        continue;
+      }
+      if (plan.binsBelow + plan.binsAbove + 1 > this.c.simulation.max_bins_per_position) {
+        this.stats.widthSkips++;
+        continue;
+      }
+      if (this.full()) return { opened, full: true };
       const p = this.requestPos(
         sim,
         {
-          strategy: s.shape, sides: s.sides, exitPolicy, variant: "none", entryMode: "friday_scalp",
-          binsBelow: s.sides === "base_only" ? 0 : s.bins_per_side, binsAbove: s.sides === "quote_only" ? 0 : s.bins_per_side,
-          capitalUsd: this.c.simulation.virtual_capital_usd, cohort: cohortNo, signalId: sig?.signal_id ?? null,
+          strategy: plan.strategy, sides: plan.sides, binsBelow: plan.binsBelow, binsAbove: plan.binsAbove, exitPolicy: plan.exitPolicy, variant: "none",
+          ...(plan.flip ? { flip: plan.flip } : {}),
+          entryMode: mod.entryMode, capitalUsd: this.c.simulation.virtual_capital_usd, cohort: cohortNo, signalId: sig?.signal_id ?? null,
           combo: {
-            entry_mode: "friday_scalp", strategy: s.shape, bins_per_side: s.bins_per_side, sides: s.sides,
-            exit_policy: exitPolicyLabel(exitPolicy), variant: "none", cohort: cohortNo, trade_no: n, reentry: !!prev, at_cohort: !reentry,
-            preset_partial: FRIDAY_NOT_YET.length > 0 || (confirm?.missing.length ?? 0) > 0,
-            preset_missing: [...FRIDAY_NOT_YET, ...(confirm?.missing ?? [])],
-            flow_at_entry: snap ? flowDetail(snap) : null,
-            pool_age_minutes: sim.meta.createdAt ? (ts - sim.meta.createdAt) / 60_000 : null,
-            base_fee_pct: baseFeePct(sim.meta), collect_fee_mode: sim.meta.collectFeeMode,
-            signal_action: sig?.action ?? null, signal_score: sig?.final_score ?? null,
+            entry_mode: mod.entryMode, ...plan.combo, cohort: cohortNo, signal_action: sig?.action ?? null, signal_score: sig?.final_score ?? null,
+            ...txEstimateJournal(mod.estimateTransactions(plan)),
           },
         },
         ts,
       );
-      this.fridayTrades.set(sim.meta.pool, { n, positionId: p.id });
+      this.cycles.set(`${mod.entryMode}|${sim.meta.pool}|${d.key}`, { n, positionId: p.id });
       this.stats.requested++;
-      this.stats.friday.opened++;
-      if (reentry) this.stats.friday.reentries++;
-      this.stats.signalEntries.friday_scalp = (this.stats.signalEntries.friday_scalp ?? 0) + 1;
+      st.opened++;
+      if (d.rv.reentry && st.reentries !== undefined) st.reentries++;
+      if (verdict.missing.length && st.partial !== undefined) st.partial++;
+      this.stats.signalEntries[mod.entryMode] = (this.stats.signalEntries[mod.entryMode] ?? 0) + 1;
       opened++;
     }
-    return opened;
-  }
-
-  /**
-   * yunus_flip: per pool and combination one bid-ask quote-only position below the price (width in
-   * price %, from the price or from the ATH), which flips base-only above once it is fully in the
-   * token (see tryFlip) and ends by its exit policy or when it is back in quote. A new cycle opens
-   * reentry.cooldown_minutes after the previous one closed, up to reentry.max_cycles_per_pool.
-   */
-  private openYunus(ts: number, cohortNo: number, reentry: boolean, only?: string): number {
-    const pr = this.yunus;
-    const inputs = this.signals?.fridayInputs;
-    if (!pr || !inputs || !this.yunusCombos.length) return 0;
-    let opened = 0;
-    for (const sim of this.sims.values()) {
-      if (only && sim.meta.pool !== only) continue;
-      if (!sim.ready || sim.priceStale(ts)) continue;
-      const pool = sim.meta.pool;
-      // which combinations of this pool may open a (new) cycle now
-      const due = this.yunusCombos.filter((c) => {
-        const prev = this.yunusTrades.get(`${pool}|${c.key}`);
-        if (!prev) return !reentry;
-        const p = sim.get(prev.positionId);
-        if (p && (p.status === "active" || p.status === "pending")) return false; // one cycle at a time
-        if (prev.n >= pr.reentry.max_cycles_per_pool) return false;
-        const since = p?.closedAt ?? p?.requestedAt ?? 0;
-        return ts - since >= pr.reentry.cooldown_minutes * 60_000;
-      });
-      if (!due.length) continue;
-      const px = sim.priceUi;
-      const ath = this.signals?.ath?.(pool, ts) ?? null;
-      const ti = this.signals?.tokenInfo?.(pool, ts) ?? null;
-      const fi = inputs(pool, ts);
-      if (!fi) continue;
-      this.stats.yunus.evaluated++;
-      const failed = evaluateYunus(pr, {
-        tvlUsd: fi.tvlUsd, category: sim.meta.category, riskIsBase: ti?.riskIsBase ?? null,
-        mintAuthority: fi.mintAuthority, freezeAuthority: fi.freezeAuthority,
-        mcapUsd: ti?.mcapUsd ?? null, tokenAgeHours: ti?.tokenAgeHours ?? null, athDrawdownPct: px ? athDrawdownPct(px, ath) : null,
-      });
-      if (failed.length) {
-        for (const f of failed) this.stats.yunus.failed[f] = (this.stats.yunus.failed[f] ?? 0) + 1;
-        continue;
-      }
-      const sig = this.signals?.book.latestFor(pool, ts) ?? null;
-      for (const c of due) {
-        const d = yunusDownside(pr, c, px, ath);
-        if ("skip" in d) {
-          this.stats.yunus.failed[d.skip] = (this.stats.yunus.failed[d.skip] ?? 0) + 1;
-          continue;
-        }
-        const bins = binsForRangePct(d.pct, sim.meta.binStep);
-        if (bins + 1 > this.c.simulation.max_bins_per_position) {
-          this.stats.widthSkips++;
-          continue;
-        }
-        if (this.full()) return opened;
-        const prev = this.yunusTrades.get(`${pool}|${c.key}`);
-        const n = (prev?.n ?? 0) + 1;
-        const p = this.requestPos(
-          sim,
-          {
-            strategy: pr.entry.shape, sides: "quote_only", binsBelow: bins, binsAbove: 0, exitPolicy: c.exit, variant: "none", flip: c.flip,
-            entryMode: "yunus_flip", capitalUsd: this.c.simulation.virtual_capital_usd, cohort: cohortNo, signalId: sig?.signal_id ?? null,
-            combo: {
-              entry_mode: "yunus_flip", strategy: pr.entry.shape, bins_per_side: bins, sides: "quote_only", range_pct: c.widthPct, anchor: c.anchor,
-              flip_shape: c.flipName, exit_policy: c.exitLabel, variant: "none", cohort: cohortNo, cycle_no: n, reentry: !!prev, at_cohort: !reentry,
-              signal_action: sig?.action ?? null, signal_score: sig?.final_score ?? null,
-              base_fee_pct: baseFeePct(sim.meta), collect_fee_mode: sim.meta.collectFeeMode,
-            },
-          },
-          ts,
-        );
-        this.yunusTrades.set(`${pool}|${c.key}`, { n, positionId: p.id });
-        this.stats.requested++;
-        this.stats.yunus.opened++;
-        if (prev) this.stats.yunus.reentries++;
-        this.stats.signalEntries.yunus_flip = (this.stats.signalEntries.yunus_flip ?? 0) + 1;
-        opened++;
-      }
-    }
-    return opened;
+    return { opened, full: false };
   }
 
   /**
@@ -899,6 +821,18 @@ export class GridRunner {
           if (sim.partialClose(p.id, vp.partial_harvest.fraction, "partial_harvest", ts)) {
             this.stats.variantActions.partial_harvest++;
             v = sim.valuation(p);
+          }
+        }
+        // ---- the strategy module's own exit rule (PHASE 3 evaluateExit), before the shared exit policies
+        const own = this.moduleByMode.get(p.spec.entryMode);
+        if (own?.evaluateExit) {
+          const why = own.evaluateExit({ sim, p, ts, netPct: (v.netPnlUsd / cap) * 100 });
+          if (why) {
+            sim.close(p.id, why, ts);
+            this.rt.delete(p.id);
+            this.stats.policyExits++;
+            this.stats.pnlExits[why] = (this.stats.pnlExits[why] ?? 0) + 1;
+            continue;
           }
         }
         // ---- PnL exit policies

@@ -323,7 +323,7 @@ grid:
     # one minute later (checked every 30 s)
     - { type: flow_trigger, sets: [volume_avg3] }
     - { type: flow_trigger, sets: [volume], confirm_seconds: 60 }
-  entry_modes: [all_pools_baseline, meridian_preset, friday_scalp, yunus_flip, signal_enter, signal_watch]
+  entry_modes: [all_pools_baseline, meridian_preset, friday_scalp, yunus_flip, evil_panda, signal_enter, signal_watch]
   variants: [none, partial_harvest, fee_compounding, single_sided_reseed, wide_range]
   variant_params:
     partial_harvest: { trigger_return_pct: 10, fraction: 0.5 }     # withdraw 50% at +10% return
@@ -356,7 +356,8 @@ weights_profile: v1_default
 presets:
   meridian: presets/meridian.yaml   # second baseline (entry mode meridian_preset)
   friday: presets/friday.yaml       # Friday's scalp playbook (entry mode friday_scalp; stage 1 = partial)
-  yunus: presets/yunus.yaml         # Yunus / EvilPanda flip playbook (entry mode yunus_flip)
+  yunus: presets/yunus.yaml         # Yunus flip playbook from tweet summaries (entry mode yunus_flip)
+  evil_panda: presets/evil_panda.yaml # the Meridian fork's Evil Panda, from its source (entry mode evil_panda)
 
 memory:                          # pool / token memory across sessions (phase 10)
   cooldown:
