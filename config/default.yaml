@@ -166,7 +166,7 @@ collectors:
     enabled: true                  # LP net deposits, unique traders, holder change per window; Meridian screens on it
     base_url: https://pool-discovery-api.datapi.meteora.ag
     interval_seconds: 60           # one request per timeframe and per batch_size pools
-    timeframes: ["5m"]             # window of every rate; the Meridian preset's fee_window must be one of them
+    timeframes: ["5m", "1h"]       # window of every rate; the Meridian preset's fee_window and regime.timeframe must be among them
     batch_size: 50                 # pools per request (`pool_address in [...]`; 40 pools = one second, ~150 KB)
     max_rps: 2
     max_age_seconds: 150           # older rows count as missing
@@ -453,6 +453,26 @@ real_lp:                         # real LP positions of other wallets (phase 11)
     max_single_add_gap_seconds: 60   # "simple" positions: one add, removes only within this of the close
     min_duration_minutes: 5
     max_checks: 500
+
+regime:                          # market regime at entry (strategy-lab roadmap PHASE 6), journaled with every position;
+  enabled: true                  # never decides an entry or exit. Thresholds are starting hypotheses per window.
+  timeframe: "1h"                # pool-discovery window used first (collect it in collectors.pool_discovery.timeframes)
+  fallback_timeframe: "5m"       # when the first one has no fresh row
+  thresholds:
+    "5m":                        # 5m price change p10/p90 in the first sessions: about -2% / +4%; volatility 0 in most rows
+      momentum_pct: 2            # |price change| for MOMENTUM_UP / MOMENTUM_DOWN
+      vol_high: 5                # Meteora volatility: >= HIGH_VOLATILITY ...
+      vol_low: 0.1               # ... <= LOW_VOLATILITY (a parked pool)
+      liquidity_pct: 1           # LP net deposits as % of TVL: >= EXPANSION, <= -CONTRACTION
+      unstable_move_pct: 10      # UNSTABLE: a price move this large ...
+      unstable_liquidity_pct: 5  # ... or LPs withdrawing this share of TVL within the window
+    "1h":
+      momentum_pct: 5
+      vol_high: 5
+      vol_low: 0.1
+      liquidity_pct: 3
+      unstable_move_pct: 25
+      unstable_liquidity_pct: 15
 
 rug_detection:                   # auto blocklist (phase 10)
   enabled: true

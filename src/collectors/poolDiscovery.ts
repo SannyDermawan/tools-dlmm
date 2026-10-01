@@ -137,6 +137,9 @@ export interface PoolDiscoveryRow {
   base_holders_change_pct: number | null;
   warnings_x: string | null;
   warnings_y: string | null;
+  tvl?: number | null;
+  volume?: number | null;
+  fee?: number | null;
 }
 
 /**
@@ -146,7 +149,7 @@ export interface PoolDiscoveryRow {
 export function poolDiscoveryLookup(db: Db, maxAgeMs: number) {
   return (pool: string, timeframe: string, t: number): PoolDiscoveryRow | null => {
     const r = db.get<PoolDiscoveryRow>(
-      `SELECT pool, ts, timeframe, volatility, price_change_pct, net_deposits, unique_traders, swap_count, unique_lps, fee_active_tvl_ratio, base_holders_change_pct, warnings_x, warnings_y
+      `SELECT pool, ts, timeframe, volatility, price_change_pct, net_deposits, unique_traders, swap_count, unique_lps, fee_active_tvl_ratio, base_holders_change_pct, warnings_x, warnings_y, tvl, volume, fee
        FROM pool_discovery WHERE pool = ? AND timeframe = ? AND ts <= ? ORDER BY ts DESC LIMIT 1`,
       pool, timeframe, t,
     );

@@ -71,6 +71,7 @@ describe("PoolDiscoveryCollector", () => {
     migrate(db);
     const c = cfg();
     c.collectors.pool_discovery.batch_size = 2;
+    c.collectors.pool_discovery.timeframes = ["5m"]; // one window keeps the call counts simple
     const calls: Record<string, unknown>[] = [];
     const http = {
       get: async (_path: string, params: Record<string, unknown>) => {

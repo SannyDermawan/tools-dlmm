@@ -436,7 +436,7 @@ program
     const { mkdirSync, writeFileSync } = await import("node:fs");
     const sessions = pickSessions(app.db, { ids: opts.session, last: opts.last, label: opts.label, live: !opts.replays && !opts.session });
     if (!sessions.length) throw new Error("no simulation sessions with closed positions");
-    const md = scorecardMarkdown(scorecard(app.db, sessions.map((s) => s.session_id), { modes: opts.mode, capitals: opts.capitals }));
+    const md = scorecardMarkdown(scorecard(app.db, sessions.map((s) => s.session_id), { modes: opts.mode, capitals: opts.capitals, regime: app.lc.config.regime }));
     mkdirSync("reports", { recursive: true });
     const file = `reports/scorecard-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.md`;
     writeFileSync(file, md);
@@ -459,7 +459,7 @@ program
     const { mkdirSync, writeFileSync } = await import("node:fs");
     const src = pickSessions(app.db, { ids: [opts.session] }).find((s) => s.kind === "session");
     if (!src) throw new Error(`no live session ${opts.session} with closed positions`);
-    const base = scorecard(app.db, [src.session_id], { capitals: opts.capitals });
+    const base = scorecard(app.db, [src.session_id], { capitals: opts.capitals, regime: app.lc.config.regime });
     const runs: { capital: number; sessionId: string }[] = [];
     if (opts.replay)
       for (const c of opts.capitals as number[]) {

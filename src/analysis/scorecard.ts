@@ -1,4 +1,6 @@
+import type { Config } from "../config/schema.ts";
 import type { Db } from "../db/index.ts";
+import { classifyRegime } from "../features/regime.ts";
 
 /**
  * Strategy profiling and scorecard (strategy-lab roadmap PHASE 5, 7, 8 and the scorecard section):
@@ -99,17 +101,25 @@ export function costClass(type: string): "tx" | "swap" | "tax" | "composition" |
   return null;
 }
 
-/** Closed, clean positions of the sessions with their cost split. */
-export function loadScorecardPositions(db: Db, sessionIds: string[], modes?: string[]): ScorecardPosition[] {
+/**
+ * Closed, clean positions of the sessions with their cost split. The regime is the journaled one
+ * (`regime`, PHASE 6), else the journaled 5-minute one, else -- with `regime` thresholds given --
+ * classified now from the 5-minute pool-discovery fields journaled since the collector exists
+ * (TVL read from the stored pool-discovery row at the entry), so older sessions get a label too.
+ */
+export function loadScorecardPositions(db: Db, sessionIds: string[], modes?: string[], regime?: Config["regime"]): ScorecardPosition[] {
   if (!sessionIds.length) return [];
   const ph = sessionIds.map(() => "?").join(",");
   const rows = db.all<{
     session: string; mode: string; pool: string; cap: number; net: number; fee: number; cost: number; dur: number | null; mdd: number | null;
     detail: string | null; opened: number | null; closed: number | null; tx: string | null; ty: string | null; regime: string | null;
+    req: number; pc: number | null; vol: number | null; nd: number | null;
   }>(
     `SELECT p.session_id session, p.entry_mode mode, p.pool, p.capital_usd cap, r.net_pnl_usd net, r.fee_usd fee, r.cost_usd cost,
             r.duration_min dur, r.max_drawdown_pct mdd, r.detail, p.opened_at opened, p.closed_at closed, pl.token_x tx, pl.token_y ty,
-            json_extract(p.grid_combo,'$.regime') regime
+            COALESCE(json_extract(p.grid_combo,'$.regime'), json_extract(p.grid_combo,'$.regime_5m')) regime, p.requested_at req,
+            json_extract(p.grid_combo,'$.pd_price_change_pct') pc, json_extract(p.grid_combo,'$.pd_volatility') vol,
+            json_extract(p.grid_combo,'$.pd_net_deposits_usd') nd
      FROM sim_positions p JOIN sim_results r USING(position_id) LEFT JOIN pools pl ON pl.pool = p.pool
      WHERE p.session_id IN (${ph}) AND p.status = 'closed' AND p.gap_tainted = 0 AND p.capital_usd > 0`,
     ...sessionIds,
@@ -117,9 +127,25 @@ export function loadScorecardPositions(db: Db, sessionIds: string[], modes?: str
   const rugs = new Map<string, number>();
   for (const b of db.all<{ mint: string; added_at: number }>("SELECT mint, added_at FROM blocklist_tokens WHERE source = 'auto_rug' AND removed_at IS NULL"))
     rugs.set(b.mint, Math.min(rugs.get(b.mint) ?? Infinity, b.added_at));
+  const th5 = regime?.thresholds["5m"] ?? null;
+  const maxAge = 5 * 60_000;
+  const tvlCache = new Map<string, number | null>();
+  const tvlAt = (pool: string, t: number) => {
+    const k = `${pool}|${Math.floor(t / 60_000)}`;
+    if (!tvlCache.has(k)) {
+      const row = db.get<{ tvl: number | null; ts: number }>(
+        "SELECT tvl, ts FROM pool_discovery WHERE pool = ? AND timeframe = '5m' AND ts <= ? ORDER BY ts DESC LIMIT 1", pool, t,
+      );
+      tvlCache.set(k, row && t - row.ts <= maxAge ? row.tvl : null);
+    }
+    return tvlCache.get(k)!;
+  };
   const out: ScorecardPosition[] = [];
   for (const r of rows) {
     if (modes?.length && !modes.includes(r.mode)) continue;
+    let label = r.regime;
+    if (!label && th5 && (r.pc !== null || r.vol !== null))
+      label = classifyRegime({ timeframe: "5m", priceChangePct: r.pc, volatility: r.vol, netDepositsUsd: r.nd, tvlUsd: r.nd !== null ? tvlAt(r.pool, r.req) : null }, th5)?.label ?? null;
     const parts = { tx: 0, swap: 0, tax: 0, composition: 0, bin_array: 0 };
     let txOps = 0;
     let rent = 0;
@@ -146,7 +172,7 @@ export function loadScorecardPositions(db: Db, sessionIds: string[], modes?: str
       session: r.session, mode: r.mode, pool: r.pool, cap: r.cap, net: r.net, fee: r.fee ?? 0, cost: r.cost ?? 0, durMin: r.dur ?? 0, mddPct: r.mdd,
       fixed: parts.tx + parts.bin_array, variable: parts.swap + parts.tax + parts.composition,
       tx: parts.tx, txOps, swap: parts.swap, tax: parts.tax, composition: parts.composition, binArray: parts.bin_array, rent, rugged,
-      regime: r.regime,
+      regime: label,
     });
   }
   return out;
@@ -231,8 +257,8 @@ export interface Scorecard {
   regimes: Map<string, { regime: string; n: number; avgNetPct: number; winRate: number }[]>;
 }
 
-export function scorecard(db: Db, sessionIds: string[], opts: { modes?: string[]; capitals?: number[] } = {}): Scorecard {
-  const ps = loadScorecardPositions(db, sessionIds, opts.modes);
+export function scorecard(db: Db, sessionIds: string[], opts: { modes?: string[]; capitals?: number[]; regime?: Config["regime"] } = {}): Scorecard {
+  const ps = loadScorecardPositions(db, sessionIds, opts.modes, opts.regime);
   const byMode = new Map<string, ScorecardPosition[]>();
   for (const p of ps) (byMode.get(p.mode) ?? byMode.set(p.mode, []).get(p.mode)!).push(p);
   const capitals = opts.capitals ?? [40, 45, 50, 100, 1000];
@@ -290,7 +316,7 @@ export function scorecardMarkdown(sc: Scorecard, opts: { title?: boolean } = {})
   md.push("");
   const known = [...sc.regimes.values()].some((v) => v.some((x) => x.regime !== "unknown"));
   if (known) {
-    md.push("**By market regime at entry** (avg net % / positions)\n");
+    md.push("**By market regime at entry** (roadmap PHASE 6; avg net % / positions; labels from the 1 h pool-discovery window when it was collected, otherwise from the 5 min one)\n");
     const labels = [...new Set([...sc.regimes.values()].flatMap((v) => v.map((x) => x.regime)))].sort();
     md.push(`| entry mode | ${labels.join(" | ")} |`);
     md.push(`|---|${labels.map(() => "--:").join("|")}|`);

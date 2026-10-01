@@ -447,7 +447,10 @@ describe("Meridian preset (addendum 2.3)", () => {
       preset: { ...preset, ranking: { top_n: 1 } },
       presetInputs: (pool) => inputs[pool],
       smartLp: (pool) => (pool === "A" ? { smart: 2, openPositions: 5 } : null),
-      tokenInfo: () => ({ tokenAgeHours: 1, mcapUsd: 900_000.4, top10Pct: 23.04, holders: 5531, organic: 76.04, botHoldersPct: 31.44, bundlerPct: 0.64, pdTimeframe: "5m", pdVolatility: 4.2214, pdPriceChangePct: -5.836, pdNetDepositsUsd: 124_657.9, pdUniqueTraders: 363, pdSwapCount: 69, pdCriticalWarning: true }),
+      tokenInfo: () => ({ tokenAgeHours: 1, mcapUsd: 900_000.4, top10Pct: 23.04, holders: 5531, organic: 76.04, botHoldersPct: 31.44, bundlerPct: 0.64, pdTimeframe: "5m", pdVolatility: 4.2214, pdPriceChangePct: -5.836, pdNetDepositsUsd: 124_657.9, pdUniqueTraders: 363, pdSwapCount: 69, pdCriticalWarning: true,
+        regime: { label: "MOMENTUM_DOWN", timeframe: "1h", trend: "down", volatility: "normal", liquidity: "expansion", liquidityPct: 3.21456, unstable: false },
+        regime5m: { label: "UNSTABLE", timeframe: "5m", trend: "down", volatility: "normal", liquidity: null, liquidityPct: null, unstable: true },
+        volumeAccel: 2.345, holdersChangePct: 1.234, feeActiveTvlPct: 0.01234 }),
     });
     runner.onTick(MIN);
     const mer = [...sims.values()].flatMap((s) => s.list()).filter((p) => p.spec.entryMode === "meridian_preset");
@@ -460,6 +463,11 @@ describe("Meridian preset (addendum 2.3)", () => {
     // token context at entry is journaled with every position (report buckets: market cap, top-10, ...)
     expect(mer[0].spec.combo).toMatchObject({ mcap_usd: 900_000, top10_pct: 23, holders: 5531, organic: 76, bot_holders_pct: 31.4, bundler_pct: 0.6, smart_lp_open: 2, lp_positions_open: 5 });
     expect(mer[0].spec.combo).toMatchObject({ pd_timeframe: "5m", pd_volatility: 4.221, pd_price_change_pct: -5.84, pd_net_deposits_usd: 124_658, pd_unique_traders: 363, pd_swap_count: 69, pd_critical_warning: 1 });
+    // market regime at entry (roadmap PHASE 6)
+    expect(mer[0].spec.combo).toMatchObject({
+      regime: "MOMENTUM_DOWN", regime_tf: "1h", regime_trend: "down", regime_vol: "normal", regime_liquidity: "expansion", regime_liq_pct: 3.215,
+      regime_5m: "UNSTABLE", volume_accel: 2.35, holders_change_pct: 1.23, fee_active_tvl_pct: 0.0123,
+    });
     // baseline still enters every pool
     expect([...sims.values()].every((s) => s.list().some((p) => p.spec.entryMode === "all_pools_baseline"))).toBe(true);
   });

@@ -120,6 +120,12 @@ export function writeSessionReport(db: Db, simSessionId: string, outDir = "repor
     ["cohort", "CAST(json_extract(p.grid_combo,'$.cohort') AS TEXT)"],
     ["close reason", "p.close_reason"],
     ["regime at entry", "COALESCE((SELECT json_extract(sg.payload,'$.regime_label') FROM signals sg WHERE sg.signal_id = p.signal_id),'unknown')"],
+    ["market regime at entry (roadmap PHASE 6)", "COALESCE(json_extract(p.grid_combo,'$.regime') || ' (' || json_extract(p.grid_combo,'$.regime_tf') || ')', 'unknown')"],
+    ["market regime at entry, 5 min window", "COALESCE(json_extract(p.grid_combo,'$.regime_5m'), 'unknown')"],
+    ["regime: price trend", "COALESCE(json_extract(p.grid_combo,'$.regime_trend'), 'unknown')"],
+    ["regime: volatility", "COALESCE(json_extract(p.grid_combo,'$.regime_vol'), 'unknown')"],
+    ["regime: LP liquidity", "COALESCE(json_extract(p.grid_combo,'$.regime_liquidity'), 'unknown')"],
+    ["volume acceleration at entry (5m x 12 / 1h)", "CASE WHEN json_extract(p.grid_combo,'$.volume_accel') IS NULL THEN 'unknown' WHEN json_extract(p.grid_combo,'$.volume_accel') < 0.5 THEN '1) < 0.5 (slowing)' WHEN json_extract(p.grid_combo,'$.volume_accel') < 2 THEN '2) 0.5-2' ELSE '3) >= 2 (accelerating)' END"],
     ["entry hour (WIB)", "printf('%02d:00', ((p.opened_at / 3600000) + 7) % 24)"],
     ["signal action at entry", "COALESCE(json_extract(p.grid_combo,'$.signal_action'),'none')"],
     ["entry mode x signal action", "p.entry_mode || ' / ' || COALESCE(json_extract(p.grid_combo,'$.signal_action'),'none')"],
@@ -216,7 +222,7 @@ export function writeSessionReport(db: Db, simSessionId: string, outDir = "repor
   md.push("");
   md.push("## Strategy scorecard: cost classes, capital efficiency, other capitals (roadmap PHASE 5-8)");
   md.push("");
-  md.push(scorecardMarkdown(scorecard(db, [simSessionId]), { title: false }));
+  md.push(scorecardMarkdown(scorecard(db, [simSessionId], { regime: loadConfig().config.regime }), { title: false }));
   md.push("The projection keeps the size-impact part of the swap cost proportional, so it is pessimistic for small positions in thin pools; `dlmm capital -s <session>` replays the session at each capital for the exact numbers.");
   md.push("");
   md.push("## Baseline vs Meridian preset vs signal (addendum 2.4)");

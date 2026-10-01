@@ -616,6 +616,27 @@ export const ConfigSchema = z
           .strict(),
       })
       .strict(),
+    regime: z
+      .object({
+        enabled: z.boolean(),
+        timeframe: z.enum(OHLCV_TIMEFRAMES),
+        fallback_timeframe: z.enum(OHLCV_TIMEFRAMES).nullable(),
+        thresholds: z.record(
+          z.string(),
+          z.object({
+            momentum_pct: pos,
+            vol_high: z.number().nonnegative(),
+            vol_low: z.number().nonnegative(),
+            liquidity_pct: pos,
+            unstable_move_pct: pos,
+            unstable_liquidity_pct: pos,
+          }).strict(),
+        ),
+      })
+      .strict()
+      .refine((r) => !!r.thresholds[r.timeframe] && (r.fallback_timeframe === null || !!r.thresholds[r.fallback_timeframe]), {
+        message: "regime.thresholds needs an entry for timeframe and fallback_timeframe",
+      }),
     rug_detection: z
       .object({
         enabled: z.boolean(),

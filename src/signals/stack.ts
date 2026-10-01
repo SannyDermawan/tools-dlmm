@@ -17,6 +17,7 @@ import { SmartLpLookup } from "../features/smartLp.ts";
 import { auditLookup, type AuditRow } from "../features/safetyData.ts";
 import { binUtilization, priceChangePct, realizedVolatilityPct, volumeAuthenticity } from "../features/poolQuality.ts";
 import { hasCriticalWarning, poolDiscoveryLookup, type PoolDiscoveryRow } from "../collectors/poolDiscovery.ts";
+import { classifyRegime, thresholdsFor, type Regime } from "../features/regime.ts";
 
 export interface DecisionStack {
   scoring: ScoringRunner;
@@ -81,6 +82,15 @@ export function buildDecisionStack(
   const pdc = c.collectors.pool_discovery;
   const discovery = pdc.enabled ? poolDiscoveryLookup(db, pdc.max_age_seconds * 1000) : null;
   const pdTimeframe = pdc.timeframes.includes("5m") ? "5m" : pdc.timeframes[0];
+  // market regime (roadmap PHASE 6): the configured window first, then the fallback; also the 5-minute one
+  // alone (regime_5m), which older sessions can be labelled with from their journaled pd_* fields
+  const rc = c.regime;
+  const regimeOf = (row: PoolDiscoveryRow | null): Regime | null => {
+    const th = row ? thresholdsFor(rc, row.timeframe) : null;
+    return row && th
+      ? classifyRegime({ timeframe: row.timeframe, priceChangePct: row.price_change_pct, volatility: row.volatility, netDepositsUsd: row.net_deposits, tvlUsd: row.tvl ?? null }, th)
+      : null;
+  };
   const lpPools = [...metaOf.keys()]; // grows with pools added during a session (reloaded every 10 min)
   const smartLp = c.real_lp.enabled ? new SmartLpLookup(db, c.real_lp.smart, lpPools) : null;
   const gridSignals: GridSignals = {
@@ -104,7 +114,19 @@ export function buildDecisionStack(
       const volatilityPct = tr ? realizedVolatilityPct(tr.prices, t, winMs) : null;
       const binUtil = tr ? binUtilization(tr.snap) : null;
       const pd = discovery ? discovery(pool, pdTimeframe, t) : null;
+      const pdMain = discovery && rc.enabled && pdc.timeframes.includes(rc.timeframe) ? discovery(pool, rc.timeframe, t) : null;
+      const pdFallback = !pdMain && discovery && rc.enabled && rc.fallback_timeframe && pdc.timeframes.includes(rc.fallback_timeframe)
+        ? rc.fallback_timeframe === pdTimeframe ? pd : discovery(pool, rc.fallback_timeframe, t)
+        : null;
+      const pd1h = pdc.timeframes.includes("1h") ? (rc.timeframe === "1h" ? pdMain : discovery?.(pool, "1h", t) ?? null) : null;
       return {
+        regime: rc.enabled ? regimeOf(pdMain ?? pdFallback) : null,
+        regime5m: rc.enabled && pd ? regimeOf(pd) : null,
+        // regime context (deterministic features of the roadmap): volume acceleration = 5m volume x 12 / 1h volume,
+        // holder growth and fee generation of the window
+        volumeAccel: pd?.volume != null && pd1h?.volume ? (pd.volume * 12) / pd1h.volume : null,
+        holdersChangePct: (pdMain ?? pd)?.base_holders_change_pct ?? null,
+        feeActiveTvlPct: (pdMain ?? pd)?.fee_active_tvl_ratio ?? null,
         tokenAgeHours: born !== null && born !== undefined ? Math.max(0, (t - born) / 3_600_000) : null, mcapUsd: a?.mcap_usd ?? null,
         riskIsBase: m ? !bluechip.has(m.tokenX) : undefined,
         top10Pct: sec?.top10_pct ?? a?.top_holders_pct ?? null, holders: sec?.total_holders ?? a?.holder_count ?? null,
