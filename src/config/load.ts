@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import YAML from "yaml";
 import { ConfigSchema, type Config } from "./schema.ts";
 
@@ -52,22 +52,34 @@ export function deepMerge(base: unknown, override: unknown): unknown {
 }
 
 /**
- * Load a config file. A non-default file may contain only overrides — it is merged on top of
- * config/default.yaml when it sets `extends: default`.
+ * Load a config file. A non-default file may contain only overrides: with `extends: default` it is
+ * merged on top of config/default.yaml; with `extends: <name>` on top of that profile (a path
+ * relative to the file's folder, `.yaml` optional), which may extend another one in turn.
  */
 export function loadConfig(path = DEFAULT_CONFIG_PATH, overrides?: unknown): LoadedConfig {
   const abs = resolve(path);
-  let raw: unknown;
+  let raw = readLayered(abs, []);
+  if (overrides) raw = deepMerge(raw, overrides);
+  return parseConfig(raw, abs);
+}
+
+function readYaml(abs: string): unknown {
   try {
-    raw = YAML.parse(readFileSync(abs, "utf8"));
+    return YAML.parse(readFileSync(abs, "utf8"));
   } catch (e) {
     throw new ConfigError(`Cannot read config ${abs}: ${(e as Error).message}`);
   }
-  if (raw && typeof raw === "object" && (raw as Record<string, unknown>).extends === "default") {
-    const { extends: _ignored, ...rest } = raw as Record<string, unknown>;
-    const base = YAML.parse(readFileSync(resolve(DEFAULT_CONFIG_PATH), "utf8"));
-    raw = deepMerge(base, rest);
-  }
-  if (overrides) raw = deepMerge(raw, overrides);
-  return parseConfig(raw, abs);
+}
+
+/** A config file with its `extends` chain resolved (base first, then each override on top). */
+function readLayered(abs: string, seen: string[]): unknown {
+  if (seen.includes(abs)) throw new ConfigError(`Config extends itself: ${[...seen, abs].join(" -> ")}`);
+  const raw = readYaml(abs);
+  if (!raw || typeof raw !== "object" || typeof (raw as Record<string, unknown>).extends !== "string") return raw;
+  const { extends: parent, ...rest } = raw as Record<string, unknown>;
+  const name = parent as string;
+  const base = name === "default"
+    ? readYaml(resolve(DEFAULT_CONFIG_PATH))
+    : readLayered(resolve(dirname(abs), name.endsWith(".yaml") ? name : `${name}.yaml`), [...seen, abs]);
+  return deepMerge(base, rest);
 }

@@ -1,0 +1,14 @@
+# Capital profile (strategy-lab roadmap PHASE 7): the 2 h session with $40 virtual positions.
+#   live:   npm run dlmm -- -c config/capital/usd-40.yaml session start -q > sesi.out 2>&1
+#   replay: npm run dlmm -- capital -s <session> --capitals 40   (same market data, every capital)
+# Only the position size changes. Signals, screens and the grid stay identical (scoring.edge.capital_usd
+# is not touched), so the capitals are compared on the same decisions; what differs is the cost: the
+# fixed-dollar part (transaction fees, bin-array creation) weighs more on a small position, and the
+# position rent (refundable, but locked while the position is open) is a larger share of it.
+extends: ../session-2h
+session:
+  label: sesi-2jam-usd40
+simulation:
+  virtual_capital_usd: 40
+portfolio:
+  start_capital_usd: 40

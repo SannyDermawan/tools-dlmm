@@ -18,6 +18,8 @@ export interface ReplayRunOptions {
   timing?: Partial<SessionTiming>;
   /** run scoring + signals + exit engine (phase 4-5); false = baseline grid only */
   signals?: boolean;
+  /** virtual position size override (roadmap PHASE 7: the same data at another capital) */
+  capitalUsd?: number;
 }
 
 export interface ReplayRunResult {
@@ -75,6 +77,7 @@ export function runReplay(app: AppContext, o: ReplayRunOptions): ReplayRunResult
   const { db, lc } = app;
   const cfg = structuredClone(lc.config);
   if (o.feeAttribution) cfg.simulation.fee_attribution = o.feeAttribution;
+  if (o.capitalUsd !== undefined) cfg.simulation.virtual_capital_usd = o.capitalUsd;
   const src = getSession(db, o.sourceSessionId);
   if (!src) throw new Error(`session ${o.sourceSessionId} not found`);
   const pools = o.pools?.length
@@ -86,8 +89,9 @@ export function runReplay(app: AppContext, o: ReplayRunOptions): ReplayRunResult
   const timing = { ...scaleTiming(timingFromConfig(cfg), (to - from) / 60_000), ...o.timing };
   const clock = new SessionClock(from, timing);
   const sessionId = createSession(db, {
-    kind: "sim_replay", configVersion: app.configVersion, label: `replay:${src.label ?? ""}`, sourceSessionId: src.session_id,
-    notes: JSON.stringify({ fee_attribution: cfg.simulation.fee_attribution, timing }),
+    kind: "sim_replay", configVersion: app.configVersion, sourceSessionId: src.session_id,
+    label: `replay:${src.label ?? ""}${o.capitalUsd !== undefined ? `:usd${o.capitalUsd}` : ""}`,
+    notes: JSON.stringify({ fee_attribution: cfg.simulation.fee_attribution, timing, capital_usd: cfg.simulation.virtual_capital_usd }),
   });
   const sink = new DbSimSink(db, sessionId, app.configVersion);
   const feeOf = transferFeeLookup(db);
@@ -136,7 +140,7 @@ export function runReplay(app: AppContext, o: ReplayRunOptions): ReplayRunResult
     }
   finishSession(db, sessionId, "completed", {
     poolCount: metas.length,
-    notes: JSON.stringify({ fee_attribution: cfg.simulation.fee_attribution, timing, grid: runner.stats, signals: stack?.book.count ?? 0, exitEngine: stack?.exitEngine.stats ?? null }),
+    notes: JSON.stringify({ fee_attribution: cfg.simulation.fee_attribution, timing, capital_usd: cfg.simulation.virtual_capital_usd, grid: runner.stats, signals: stack?.book.count ?? 0, exitEngine: stack?.exitEngine.stats ?? null }),
   });
   return { sessionId, positions, closed, failed, timing, grid: runner.stats, signals: stack?.book.count ?? 0, exitEngine: stack?.exitEngine.stats ?? null };
 }

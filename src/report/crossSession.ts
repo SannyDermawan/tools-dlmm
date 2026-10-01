@@ -13,7 +13,7 @@ export interface SessionPick {
 }
 
 /** Simulation sessions (live or replay) with closed positions, oldest first. */
-export function pickSessions(db: Db, o: { ids?: string[]; last?: number; label?: string }): SessionPick[] {
+export function pickSessions(db: Db, o: { ids?: string[]; last?: number; label?: string; live?: boolean }): SessionPick[] {
   const rows = db.all<SessionPick>(
     `SELECT s.session_id, s.kind, s.label, s.start_at, COUNT(p.position_id) positions
      FROM sessions s JOIN sim_positions p ON p.session_id = s.session_id
@@ -23,6 +23,7 @@ export function pickSessions(db: Db, o: { ids?: string[]; last?: number; label?:
   let out = rows;
   if (o.ids?.length) out = out.filter((r) => o.ids!.some((id) => r.session_id.startsWith(id)));
   if (o.label) out = out.filter((r) => (r.label ?? "").includes(o.label!));
+  if (o.live) out = out.filter((r) => r.kind === "session"); // replays of the same data are not independent evidence
   if (o.last) out = out.slice(-o.last);
   return out;
 }

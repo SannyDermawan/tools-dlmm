@@ -383,10 +383,11 @@ program
   .option("--last <n>", "only the last N sessions", (v) => parseInt(v, 10))
   .option("--label <text>", "only sessions whose label contains this")
   .option("--holdout <n>", "keep the last N sessions as holdout", (v) => parseInt(v, 10), 0)
+  .option("--live", "live sessions only (no replays)")
   .action(async (opts) => {
     const app = createApp(cfgPath());
     const { analyzeSessions, pickSessions } = await import("./report/crossSession.ts");
-    const sessions = pickSessions(app.db, { ids: opts.session, last: opts.last, label: opts.label });
+    const sessions = pickSessions(app.db, { ids: opts.session, last: opts.last, label: opts.label, live: opts.live });
     if (!sessions.length) throw new Error("no simulation sessions with closed positions");
     const r = analyzeSessions(app.db, sessions, opts.holdout);
     console.log(r.text);
@@ -414,6 +415,66 @@ macroCmd
     console.log(`imported ${n} macro events`);
     for (const r of app.db.all<{ ts: number; name: string; impact: string }>("SELECT * FROM macro_events WHERE ts >= ? ORDER BY ts", Date.now()))
       console.log(`  ${new Date(r.ts).toISOString()}  ${r.name}  ${r.impact ?? ""}`);
+    app.db.close();
+  });
+
+const capitalList = (v: string) => v.split(",").map((x) => parseFloat(x)).filter((x) => Number.isFinite(x) && x > 0);
+
+program
+  .command("scorecard")
+  .description("strategy scorecard (roadmap PHASE 5-8): sample, performance, fixed vs variable cost, capital efficiency, rug exposure, regime, projection to other capitals")
+  .option("-s, --session <id...>", "sessions (prefixes); default: all live sessions")
+  .option("--last <n>", "only the last N sessions", (v) => parseInt(v, 10))
+  .option("--label <text>", "only sessions whose label contains this")
+  .option("--replays", "include replays (not independent evidence)")
+  .option("-m, --mode <mode...>", "only these entry modes")
+  .option("--capitals <list>", "capitals to project to, comma separated", capitalList, [40, 45, 50, 100, 1000])
+  .action(async (opts) => {
+    const app = createApp(cfgPath());
+    const { pickSessions } = await import("./report/crossSession.ts");
+    const { scorecard, scorecardMarkdown } = await import("./analysis/scorecard.ts");
+    const { mkdirSync, writeFileSync } = await import("node:fs");
+    const sessions = pickSessions(app.db, { ids: opts.session, last: opts.last, label: opts.label, live: !opts.replays && !opts.session });
+    if (!sessions.length) throw new Error("no simulation sessions with closed positions");
+    const md = scorecardMarkdown(scorecard(app.db, sessions.map((s) => s.session_id), { modes: opts.mode, capitals: opts.capitals }));
+    mkdirSync("reports", { recursive: true });
+    const file = `reports/scorecard-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.md`;
+    writeFileSync(file, md);
+    console.log(md);
+    console.log(`written: ${file}`);
+    app.db.close();
+  });
+
+program
+  .command("capital")
+  .description("capital-aware simulation (roadmap PHASE 7): replay a session at several position sizes and compare net, break-even and fixed cost per entry mode")
+  .requiredOption("-s, --session <id>", "live session to replay (prefix)")
+  .option("--capitals <list>", "position sizes in USD, comma separated", capitalList, [40, 45, 50, 100, 1000])
+  .option("--no-replay", "only the projection from the stored positions (no replays)")
+  .action(async (opts) => {
+    const app = createApp(cfgPath());
+    const { pickSessions } = await import("./report/crossSession.ts");
+    const { scorecard, capitalComparisonMarkdown } = await import("./analysis/scorecard.ts");
+    const { runReplay } = await import("./sim/replayRunner.ts");
+    const { mkdirSync, writeFileSync } = await import("node:fs");
+    const src = pickSessions(app.db, { ids: [opts.session] }).find((s) => s.kind === "session");
+    if (!src) throw new Error(`no live session ${opts.session} with closed positions`);
+    const base = scorecard(app.db, [src.session_id], { capitals: opts.capitals });
+    const runs: { capital: number; sessionId: string }[] = [];
+    if (opts.replay)
+      for (const c of opts.capitals as number[]) {
+        const t0 = Date.now();
+        const r = runReplay(app, { sourceSessionId: src.session_id, capitalUsd: c });
+        console.log(`$${c}: replay ${r.sessionId} (${r.closed} positions) in ${((Date.now() - t0) / 1000).toFixed(0)} s`);
+        runs.push({ capital: c, sessionId: r.sessionId });
+      }
+    const replays = runs.map((r) => ({ capital: r.capital, sc: scorecard(app.db, [r.sessionId], { capitals: [r.capital] }) }));
+    const md = capitalComparisonMarkdown(src.session_id, base, replays);
+    mkdirSync("reports", { recursive: true });
+    const file = `reports/capital-${src.session_id.slice(0, 8)}-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.md`;
+    writeFileSync(file, md);
+    console.log(md);
+    console.log(`written: ${file}`);
     app.db.close();
   });
 
