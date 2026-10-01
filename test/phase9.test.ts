@@ -228,10 +228,13 @@ describe("strategy variants (addendum 2.2)", () => {
     const after = sim.valuation(p);
     const added = p.sunkCostUsd() - costsBefore;
     expect(added).toBeGreaterThan(0);
+    // the swap of the fee mismatch is paid in kind (the liquidity grows by the fee net of it)
+    const swap = p.costs.filter((x) => x.type === "balancing_swap" && x.inKind).at(-1)?.usd ?? 0;
     expect(after.feeUsd).toBe(0);
     expect(p.compoundedFeeUsd).toBeCloseTo(before.feeUsd, 6);
     expect(p.liquidityAt(0)).toBeGreaterThan(Lbefore);
-    expect(after.netPnlUsd).toBeCloseTo(before.netPnlUsd - added, 6);
+    expect(after.netPnlUsd).toBeCloseTo(before.netPnlUsd - added - swap, 6);
+    expect(after.costUsd - before.costUsd).toBeCloseTo(added + swap, 6);
     const types = (sink.events.find((e) => e.type === "compound")!.detail.costs as { type: string }[]).map((x) => x.type);
     expect(types).toEqual(expect.arrayContaining(["tx_claim", "tx_add"]));
     const r = sim.close(p.id, "test", 63_000)!;

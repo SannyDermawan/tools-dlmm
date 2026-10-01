@@ -867,9 +867,9 @@ flagged their token); the result by market regime; and the same positions **proj
 the position size; `dlmm capital -s <session>` replays that session at each size (exact, the fee share per dollar
 included) next to the projection. First reading over three sessions: fixed cost is ~0.04 % of a $1000 position and
 ~0.9 % of a $45 one (baseline break-even 1.85 % -> 2.70 %); the **position rent (~$7-26) is 15-40 % of a $45 position**:
-refunded, but the wallet must hold it. Known simulator bias, not changed: a big balancing swap is charged in dollars at
+refunded, but the wallet must hold it. Known simulator bias at the time: a big balancing swap is charged in dollars at
 the open and not scaled by the later price move, so a position in a dump can show more than -100 % (17 positions, all
-in the rugged terrafying pool). `analyze --live` leaves replays out.
+in the rugged terrafying pool); fixed the same day, see "Swap costs paid in kind" below. `analyze --live` leaves replays out.
 
 **PHASE 6: market regime.** `src/features/regime.ts` labels each position at entry with one of the roadmap's eight
 regimes from one pool-discovery window: price change (MOMENTUM_UP / _DOWN), Meteora volatility (HIGH / LOW_VOLATILITY),
@@ -914,6 +914,40 @@ Not done, and why: PHASE 4's optimized mode needs Jev or a regime -> strategy ta
 (research mode is the default and stays unbiased); PHASE 9-10 (Jev) per the roadmap's own plan start at 20-30
 sessions and need a paid LLM key; PHASE 11-12 need 50-100+ sessions; PHASE 14 needs all of them.
 400 tests pass.
+
+## Swap costs paid in kind (2026-10-01) ✅
+
+Bug: the balancing swap of an open (quote -> X for two-sided and base-only ranges) was booked as a USD cost while the
+position was still deposited with the full capital's worth of tokens. The cost (pool fee / aggregator quote + size
+impact, capped at `size_impact.max_pct`) stayed a fixed dollar loss when the token fell, so a dump counted it twice:
+session 8691ab49, pool 56pmBt1W (terrafying, rugged -81 %), base-only $1000 positions in a $430 pool paid a $333 swap,
+still held $1000 of tokens and lost up to 115.8 % (17 positions below -100 %).
+
+Now a swap that buys tokens for the position is **paid in kind**: the position receives fewer tokens, and the cost
+item keeps the raw amounts it took (`CostItem.inKind`). This applies to the open's balancing swap (fewer X), a
+rebalance / reseed swap (fewer tokens of the side bought) and the fee-compounding swap (the liquidity grows by the
+fee net of it). Accounting, with nothing counted twice:
+- `net = value + fees - capital - cash costs`: the in-kind cost is missing from the value only, so it shrinks with
+  the token (in the rug above it weighs $333 x 0.19 ~ $63 at the close).
+- HODL basket = what the capital buys **without** swap costs (as before: hodl = capital at the open).
+- `il_usd = value + in-kind cost now - hodl`: pure IL, no swap cost in it.
+- `cost_usd = cash costs + in-kind costs at the close price`, so `net = fee + IL + (hodl - capital) - cost` and
+  `pnlVsHodl = fee + IL - cost` hold. In `detail.costs` an in-kind item's `usd` is its value at the close (the split
+  still adds up to `cost_usd`, which the break-even report and the scorecard's cost classes rely on), `bookUsd` the
+  value when it was paid, `inKind: true`; `detail.inKindCostUsd` is the total. The open event journals book values.
+- The **exit swap** (and a partial exit's) stays a cash cost: it is priced on the X value at the close, with no later
+  price move to scale it; `swapCost` never charges more than the notional, so it cannot exceed the tokens sold.
+- Drawdown equity and the heartbeat's IL use the same definitions.
+Result: a position cannot lose more than its capital plus its fixed costs (transactions, bin arrays, composition fee,
+token tax). Replay of that pool (session 8691ab49, `--no-signals`, 270 positions): positions below -100 % 20 -> 0,
+worst -115.4 % -> -89.6 %, base-only average -75.8 % -> -64.3 %, average break-even 11.6 % -> 7.1 % (two-sided and
+quote-only nearly unchanged); a few PnL-based exits moved (stop loss 45 -> 44). Stored results of earlier sessions keep
+the old accounting (replay them to compare). `dlmm lp realism --recheck` on a copy of the database: identical to the
+old code for all 1322 checks (max difference $0 in fee, PnL before and after costs; headline fee diff median -2.7 %,
+PnL diff before costs -0.19 pp, after costs -0.35 pp): the realism replay has no balancing or exit swap.
+Tests: `test/inKindSwap.test.ts` (5: tokens kept at the open, scaling in the -81 % rug, cost split = `cost_usd`, loss
+bound over sides x exit_to x price moves x rebalance, exit swap); three existing tests now assert value + in-kind
+cost instead of the old identity. 405 tests pass.
 
 ## RPC: Helius Free + swap stream redesign (2026-09-29)
 - `.env` points to Helius (Free: 1M credits/month, 10 rps). Rate limits: critical 3 rps +

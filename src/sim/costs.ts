@@ -9,6 +9,13 @@ export interface CostItem {
   sol?: number;
   refundable: boolean;
   detail?: Record<string, unknown>;
+  /**
+   * Paid in tokens (a swap's fee + price impact: fewer tokens received). Raw amounts of X / Y the
+   * position does not hold because of it; `usd` is the value when it was paid. The position value
+   * already lacks these tokens, so the item is not subtracted again: PnL reports value them at
+   * the current price (a token that dumps after the open takes the lost tokens down with it).
+   */
+  inKind?: { x: number; y: number };
 }
 
 export interface CostContext {
@@ -64,9 +71,13 @@ export class CostModel {
     return { type: "bin_array_init", sol, usd: sol * ctx.solUsd, refundable: this.c.bin_array_rent_refundable, detail: { arrays: [...need] } };
   }
 
-  /** Swapping `notionalUsd` at `swapRate` (aggregator quote or pool fee, see PoolSimulator.swapRate) + slippage margin. */
+  /**
+   * Swapping `notionalUsd` at `swapRate` (aggregator quote or pool fee, see PoolSimulator.swapRate)
+   * + slippage margin; never more than the notional. The caller deducts it from the tokens
+   * received (`inKind`) or, for exit swaps into cash, books it as a USD cost.
+   */
   swapCost(notionalUsd: number, swapRate: number, label = "balancing_swap"): CostItem {
-    const rate = swapRate + this.c.slippage_margin_pct / 100;
+    const rate = Math.min(1, swapRate + this.c.slippage_margin_pct / 100);
     return { type: label, usd: Math.abs(notionalUsd) * rate, refundable: false, detail: { notionalUsd, swapRate, slippagePct: this.c.slippage_margin_pct, model: this.c.swap_model } };
   }
 

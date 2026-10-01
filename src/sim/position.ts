@@ -114,7 +114,7 @@ export class VirtualPosition {
   compoundedFeeUsd = 0;
   /** fees accrue only over data intervals starting at or after this time (open / last rebalance) */
   accrualFrom: number | null = null;
-  last: { valueUsd: number; feeUsd: number; hodlUsd: number; priceUi: number; quoteUsd: number } | null = null;
+  last: { valueUsd: number; feeUsd: number; hodlUsd: number; ilUsd: number; priceUi: number; quoteUsd: number } | null = null;
 
   constructor(
     readonly id: string,
@@ -143,8 +143,20 @@ export class VirtualPosition {
     return this.bins.get(binId)?.L ?? 0;
   }
 
+  /** Non-refundable costs paid in cash (USD at payment). In-kind swap costs are already missing from the value. */
   sunkCostUsd(): number {
-    return this.costs.filter((c) => !c.refundable).reduce((s, c) => s + c.usd, 0);
+    return this.costs.filter((c) => !c.refundable && !c.inKind).reduce((s, c) => s + c.usd, 0);
+  }
+
+  /** Raw tokens kept by in-kind swap costs (balancing / rebalance / compounding swaps). */
+  inKindLoss(): Composition {
+    let x = 0;
+    let y = 0;
+    for (const c of this.costs) if (c.inKind) {
+      x += c.inKind.x;
+      y += c.inKind.y;
+    }
+    return { x, y };
   }
 
   lockedRentUsd(): number {
@@ -160,14 +172,22 @@ export interface Valuation {
   valueUsd: number;
   feeUsd: number;
   hodlUsd: number;
+  /** IL against the HODL basket, without the in-kind swap costs (they are in costUsd) */
   ilUsd: number;
+  /** cash costs + in-kind swap costs at the current price */
   costUsd: number;
+  /** in-kind swap costs at the current price (part of costUsd) */
+  inKindCostUsd: number;
   netPnlUsd: number;
   x: number;
   y: number;
 }
 
-/** USD valuation. X is valued at the current market (active bin) price, as in blueprint 12.4. */
+/**
+ * USD valuation. X is valued at the current market (active bin) price, as in blueprint 12.4.
+ * The HODL basket is what the capital buys without swap costs; swap costs paid in tokens are valued
+ * at the current price, so net = fee + IL + (hodl - capital) - cost holds and nothing counts twice.
+ */
 export function valuePosition(
   p: VirtualPosition,
   activeId: number,
@@ -182,10 +202,12 @@ export function valuePosition(
   const valueUsd = (toQuote(c.x, c.y) + p.realizedQuote) * quoteUsd;
   const feeUsd = toQuote(p.feeX, p.feeY) * quoteUsd;
   const hodlUsd = toQuote(p.x0, p.y0) * quoteUsd;
-  const costUsd = p.sunkCostUsd();
+  const sunk = p.sunkCostUsd();
+  const lost = p.inKindLoss();
+  const inKindCostUsd = toQuote(lost.x, lost.y) * quoteUsd;
   return {
-    valueUsd, feeUsd, hodlUsd, ilUsd: valueUsd - hodlUsd, costUsd,
-    netPnlUsd: valueUsd + feeUsd - p.spec.capitalUsd - costUsd,
+    valueUsd, feeUsd, hodlUsd, ilUsd: valueUsd + inKindCostUsd - hodlUsd, costUsd: sunk + inKindCostUsd, inKindCostUsd,
+    netPnlUsd: valueUsd + feeUsd - p.spec.capitalUsd - sunk,
     x: c.x, y: c.y,
   };
 }

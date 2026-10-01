@@ -44,7 +44,7 @@ export function buildHeartbeat(
       if (!p.last || (p.status !== "active" && p.status !== "closed")) continue;
       // mark-to-market (active) or final (closed) values from the last valuation
       const net = p.last.valueUsd + p.last.feeUsd - p.spec.capitalUsd - p.sunkCostUsd();
-      const il = p.last.valueUsd - p.last.hodlUsd;
+      const il = p.last.ilUsd;
       const act = p.status === "active";
       add(byMode, p.spec.entryMode, net, p.last.feeUsd, il, act);
       add(byStrategy, p.spec.strategy, net, p.last.feeUsd, il, act);

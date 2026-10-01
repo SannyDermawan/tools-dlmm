@@ -335,7 +335,9 @@ describe("PoolSimulator", () => {
     sim.onState(state(60_000, 0));
     const r = sim.close(p.id, "session_end", 60_000)!;
     expect(r.feeUsd).toBeGreaterThan(0);
-    expect(r.netPnlUsd).toBeCloseTo(r.finalValueUsd + r.feeUsd - 1000 - r.costUsd, 9);
+    // in-kind swap costs are missing from the final value and part of costUsd: added back once
+    expect(r.netPnlUsd).toBeCloseTo(r.finalValueUsd + r.feeUsd - 1000 - r.costUsd + (r.detail.inKindCostUsd as number), 9);
+    expect(r.netPnlUsd).toBeCloseTo(r.feeUsd + r.ilUsd + (r.hodlValueUsd - 1000) - r.costUsd, 9);
     expect(r.timeInRangePct).toBeCloseTo(100);
     expect(r.rentLockedUsd).toBeGreaterThan(0);
     expect(sink.results).toHaveLength(1);
